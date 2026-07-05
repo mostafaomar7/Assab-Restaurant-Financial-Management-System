@@ -1,0 +1,46 @@
+This is a solid correction and the system behavior is now much closer to what we expect from a financial workflow platform.
+
+The changes around:
+
+• proper lock enforcement  
+• corrective operations linked to the original record  
+• lifecycle-driven audit trail  
+• separating final approval from ERP posting  
+
+are all moving the system in the right direction.
+
+The distinction between `final-approved` and `erpPosted` is especially important and the changes you implemented around the ERP queue logic look correct.
+
+Before we move forward, I want to align the implementation with the broader ASAB system architecture, because this prototype represents a financial control layer, not just an approval interface.
+
+ASAB workflow is structured as follows:
+
+Branch Manager (primarily from the mobile app)  
+→ operations enter the system  
+→ Accountant review  
+→ Head Accountant final approval  
+→ module aggregation (expenses, sales, etc.)  
+→ ERP export  
+→ ERP processing  
+→ ERP reports imported back into ASAB  
+→ read-only financial reports  
+→ final visibility for restaurant owners
+
+Because of this, there are three architectural rules that should remain visible in the system behavior:
+
+1. Operations entering the dashboard originate mostly from the mobile branch layer.  
+The dashboard acts as a financial supervision and approval layer, not the primary data entry layer.
+
+2. Final approval and ERP posting are two separate stages in the lifecycle:
+   - `final-approved` → workflow completed, record locked
+   - `erpPosted` → successfully exported and processed in ERP
+
+3. Once ERP reports are imported back into ASAB, those records must remain **read-only reference data**, not operational records.
+
+Your recent fixes correctly move the prototype toward this architecture.
+
+Next iteration should therefore focus on making sure the UI and navigation clearly reflect the lifecycle of an operation across these stages:
+
+submission → review → approval → ERP export → ERP processed → financial reporting
+
+If the same clarity we now have in the state logic is also reflected consistently across dashboards, lists, badges, and module queues, the prototype will start to behave much closer to the real ASAB system.

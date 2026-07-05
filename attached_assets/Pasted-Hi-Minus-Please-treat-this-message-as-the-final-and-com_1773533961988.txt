@@ -1,0 +1,296 @@
+Hi Minus,
+
+Please treat this message as the **final and comprehensive refinement direction for the ASAB dashboard and modules**.
+
+ASAB is **not a traditional reporting dashboard**.
+It is primarily a **financial control, reconciliation, and operational workflow system** used by accountants to review, verify, and approve operational data coming from restaurant branches.
+
+Because of this, the system must prioritize:
+
+• workflow clarity
+• anomaly detection
+• operational review efficiency
+• structured drill-down navigation
+• strong filtering and verification tools
+
+Below are the final required improvements to reach the **professional level expected for ASAB**.
+
+---
+
+# 1. Top summary cards across the system
+
+Across all modules and accountant screens, the top summary cards **should not display monetary totals** such as:
+
+• total sales
+• total cash
+• total expenses
+• total purchases
+
+Instead they should display **operational counts**, such as:
+
+• total submitted operations
+• approved operations
+• rejected operations
+• pending operations
+• partially reviewed operations
+
+ASAB is primarily a **matching and review system**, not a reporting system.
+
+---
+
+# 2. Reminder system for missing branch submissions
+
+Add a **professional reminder mechanism** that allows the accountant to notify branch managers when required data has not been submitted.
+
+Examples:
+
+• missing daily sales submission
+• missing daily inventory count
+• missing purchase submission
+• missing waste report
+
+The accountant should be able to send a reminder directly from the dashboard.
+
+The branch manager should receive this notification in the **mobile application** and respond with one of the following statuses:
+
+• will send later
+• no purchases today
+• inventory already counted / pending upload
+• explanation message
+
+This communication should be structured and visible inside the workflow.
+
+---
+
+# 3. Sales module – Accountant review tools
+
+Inside the detailed sales report:
+
+Add a **quick verification mechanism**.
+
+The accountant usually compares:
+
+• POS network sales
+• cash sales
+• delivery platforms (Jahez, HungerStation, etc.)
+
+When a section is verified and matches the accountant's external records (bank slips, delivery reports, etc.), the accountant should simply click a **verification icon (like / check mark)**.
+
+This allows the accountant to quickly mark items as **verified/matched** without editing data.
+
+This should act as a **review confirmation marker**.
+
+---
+
+# 4. Expenses module improvements
+
+In the expenses review screen:
+
+Add a **dedicated attachment viewer icon**.
+
+Each expense may contain:
+
+• one attachment
+• multiple attachments
+
+The accountant should be able to:
+
+• open attachments quickly
+• scroll through multiple attachments
+• review invoices directly inside the interface
+• mark the expense as verified using a verification icon
+
+This improves accountant efficiency during expense review.
+
+---
+
+# 5. Purchases module – Consumption intelligence
+
+Add a **daily consumption indicator per product per branch**.
+
+This allows the procurement manager to evaluate whether a purchase quantity is:
+
+• appropriate
+• excessive
+• insufficient
+
+For each product the system should show:
+
+• daily consumption average
+• recommended purchase quantity
+• purchased quantity
+
+Also add **price comparison tools for procurement**:
+
+• compare supplier prices
+• compare historical purchase prices
+• highlight abnormal price differences
+
+This is critical for procurement decision quality.
+
+---
+
+# 6. Inventory module – Accountant review
+
+When reviewing branch inventory:
+
+Add comparison between:
+
+• current inventory count
+• previous month inventory
+
+Display:
+
+• quantity difference
+• percentage variance
+
+Large anomalies should be **highlighted automatically**.
+
+Example:
+
+Pepsi last month: 10 units
+Pepsi this month: 1000 units
+
+The system should clearly alert the accountant that this requires investigation.
+
+---
+
+# 7. Daily inventory reconciliation screen
+
+Create a professional review interface for daily inventory verification based on:
+
+Opening Balance
+
+* Purchases
+  − Sales
+  ± Transfers
+  = Closing Balance
+
+If a variance exists, the accountant should be able to **assign responsibility to a branch employee**.
+
+When entering the employee number, the employee name should appear automatically.
+
+---
+
+# 8. Waste / Damage module improvements
+
+Each waste or damage entry may include multiple products.
+
+Each product may contain:
+
+• image
+• classification
+• quantity
+• responsibility status
+
+The accountant must be able to modify classification if necessary:
+
+• waste
+• damaged
+
+This classification determines whether the loss is charged to:
+
+• employee
+• restaurant
+
+---
+
+# 9. Fixed Assets coordination (Mobile + Accountant)
+
+In the Fixed Assets module there must be coordination between:
+
+• branch manager (mobile app)
+• accountant (dashboard)
+
+Two cases must be supported:
+
+Case 1 – Asset received by branch manager
+The branch manager uploads the asset and invoice via the mobile app.
+
+Case 2 – Asset purchased through accounting
+The accountant registers the invoice, and the branch manager must confirm asset receipt via the mobile app.
+
+The system must include a **clear confirmation workflow between both parties**.
+
+---
+
+# 10. Employee ledger
+
+Filtering required:
+
+• employee number
+• branch
+• brand
+
+Each row shows:
+
+employee name + current balance
+
+Clicking the employee opens the **full transaction history**.
+
+---
+
+# 11. Cash custody / petty cash
+
+Follow the same professional structure:
+
+• filtering
+• drill-down
+• pending operation review
+• structured editing
+
+---
+
+# 12. Shifts module
+
+For accountants this module is **view-only**.
+
+Display:
+
+• number of shifts per restaurant
+• shift manager
+• contact details
+
+Editing allowed only for:
+
+• Chief Accountant
+• System Admin
+
+---
+
+# 13. Admin module – Users
+
+The user creation process must clearly distinguish user types:
+
+• restaurant owner
+• branch manager
+• accountant
+• chief accountant
+• admin / super admin
+
+Role separation must be clearer and more structured.
+
+---
+
+# 14. General workflow principle
+
+Across the entire system:
+
+Top area → operational counts
+Table rows → workflow overview
+Click row → detailed review
+Filtering → essential
+Verification icons → quick accountant validation
+Attachments → easily accessible
+
+The system must **help accountants detect anomalies and verify operational data efficiently**, not just display information.
+
+---
+
+# Final request
+
+Please implement all of the above improvements and provide me with the **updated and finalized ASAB dashboard** for full review.
+
+I would like to see the complete system workflow after these refinements are applied.
+
+Looking forward to reviewing the **final dashboard version**.

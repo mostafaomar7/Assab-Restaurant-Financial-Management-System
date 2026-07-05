@@ -1,0 +1,30 @@
+modules = ["nodejs-24"]
+
+  [[artifacts]]
+  id = "artifacts/api-server"
+
+  [[artifacts]]
+  id = "artifacts/mockup-sandbox"
+
+  [deployment]
+  deploymentTarget = "static"
+  publicDir = "artifacts/mockup-sandbox/dist"
+
+  [deployment.build]
+  args = ["bash", "-c", "BASE_PATH=/ PORT=3000 NODE_ENV=production pnpm --filter @workspace/mockup-sandbox run build && cp artifacts/mockup-sandbox/dist/index.html artifacts/mockup-sandbox/dist/200.html && cp artifacts/mockup-sandbox/dist/index.html artifacts/mockup-sandbox/dist/404.html && echo '/*    /index.html   200' > artifacts/mockup-sandbox/dist/_redirects"]
+
+  [deployment.postBuild]
+  args = ["pnpm", "store", "prune"]
+  env = { "CI" = "true" }
+
+  [workflows]
+  runButton = "Project"
+
+  [agent]
+  stack = "PNPM_WORKSPACE"
+expertMode = true
+
+  [postMerge]
+  path = "scripts/post-merge.sh"
+  timeoutMs = 20000
+  

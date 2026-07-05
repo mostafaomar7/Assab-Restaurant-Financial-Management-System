@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --asab-primary: #7C3AED;
+  --asab-primary-light: #8B5CF6;
+  --asab-primary-dark: #6D28D9;
+  --asab-accent: #00D9FF;
+  --asab-success: #10B981;
+  --asab-warning: #F59E0B;
+  --asab-danger: #EF4444;
+  --asab-info: #3B82F6;
+  --asab-sidebar: #1E1B4B;
+  --asab-sidebar-hover: #2D2A7A;
+  --asab-bg: #F8F7FF;
+  --asab-card: #FFFFFF;
+  --asab-border: #E5E7EB;
+  --asab-text-primary: #111827;
+  --asab-text-secondary: #6B7280;
+  --asab-text-muted: #9CA3AF;
+}
+
+.asab-root {
+  font-family: 'IBM Plex Sans Arabic', 'Segoe UI', sans-serif;
+  direction: rtl;
+  background: var(--asab-bg);
+  min-height: 100vh;
+}

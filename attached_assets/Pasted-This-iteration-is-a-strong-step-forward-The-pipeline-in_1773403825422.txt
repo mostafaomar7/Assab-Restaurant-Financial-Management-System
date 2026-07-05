@@ -1,0 +1,47 @@
+This iteration is a strong step forward.
+
+The pipeline infrastructure, PipelineBar, stage pills, and the dashboard pipeline overview are exactly the type of lifecycle visibility the system needs.
+
+Making the lifecycle explicit across lists, dashboards, and detail pages improves the operational clarity of the prototype significantly.
+
+There are three architectural points I want to verify as we move forward, to ensure the pipeline is not only visual but also structurally correct within the ASAB system model.
+
+1. Source clarity (mobile-first entry)
+
+Most operations in ASAB originate from the branch mobile application.
+
+The dashboard is primarily a financial supervision layer, not the primary entry interface.
+
+Because of this, the pipeline should clearly preserve the origin of the operation (mobile submission, procurement workflow, or system import) and keep that context visible throughout the lifecycle.
+
+2. Pipeline as system logic, not only visualization
+
+The pipeline stages should remain a deterministic representation of the real state machine.
+
+In other words, the PipelineBar and OpStagePill must always reflect the underlying operation state — not an independently calculated UI layer.
+
+The state model should remain the single source of truth.
+
+3. Stage-6 (ERP Reports) as read-only financial reference
+
+The ERP reports stage is correctly separated visually, which is good.
+
+However it is important that stage-6 records remain clearly distinguished from operational records.
+
+These should behave as:
+
+• imported financial results  
+• immutable reference data  
+• not part of the operational workflow anymore  
+
+This distinction is important because ASAB acts as the operational layer before ERP, and the financial reporting layer after ERP.
+
+Overall, the pipeline visibility is now moving in the right direction.
+
+The next refinement should focus on making sure that:
+
+• stage logic, counts, and filters are all driven by the same underlying state  
+• pipeline visibility remains consistent across all modules  
+• ERP-returned reports remain clearly separated from operational records
+
+Once these three aspects are confirmed, the lifecycle representation in the prototype will closely match the real ASAB operational flow.

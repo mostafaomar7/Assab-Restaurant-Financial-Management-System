@@ -1,0 +1,107 @@
+Additional administrative and system management improvements for ASAB:
+
+---
+
+# 15. Admin Module – User distribution and restaurant structure
+
+The Users section in the Admin module needs to be redesigned in a more professional and structured way.
+
+The system should support **clear operational hierarchy and assignment logic**.
+
+### Accountant assignment
+
+When creating or managing an accountant user, the system should allow assigning that accountant to specific restaurants.
+
+Example:
+
+Accountant → assigned restaurants list.
+
+This allows the system to clearly define which restaurants the accountant is responsible for reviewing.
+
+### Chief Accountant assignment
+
+When creating a Chief Accountant, the system should allow assigning which accountants are managed under that Chief Accountant.
+
+Example:
+
+Chief Accountant → manages accountants A, B, C.
+
+This hierarchy must be visible and editable from the admin interface.
+
+---
+
+# 16. Restaurant and brand structure management
+
+Restaurant and brand structure must be managed professionally.
+
+The system must support:
+
+Brand
+→ multiple restaurants / branches
+→ restaurant-specific users
+
+Each restaurant should have its own user assignments, such as:
+
+• branch manager
+• accountant (if applicable)
+• operational roles
+
+Users belonging to one restaurant should **not automatically appear in another restaurant unless assigned**.
+
+The admin panel must allow:
+
+• adding brands
+• adding restaurants under each brand
+• assigning users to each restaurant individually.
+
+---
+
+# 17. Subscription management improvements
+
+The Subscriptions section in the Admin module should be more structured and professional.
+
+It should clearly show:
+
+• brand
+• number of restaurants under the brand
+• subscription plan
+• active modules
+• subscription status
+• billing information
+
+The overview screen should provide a **clean operational summary**, with the ability to drill down into each brand or restaurant subscription.
+
+---
+
+# 18. System overview improvements
+
+The general system overview in the admin area should provide more professional insight such as:
+
+• number of brands
+• number of restaurants
+• number of active users
+• operational activity indicators
+
+The overview should help the admin quickly understand the **system structure and operational distribution**.
+
+---
+
+# 19. Supplier module – Workflow improvements
+
+In the Supplier module, apply the supplier approval flow described in the earlier attachments.
+
+Additionally, add **bulk approval functionality**.
+
+Example:
+
+If a restaurant submits multiple purchase requests to the same supplier, the procurement manager should be able to **approve all related requests at once**.
+
+This should improve efficiency when processing multiple requests for the same restaurant and supplier.
+
+---
+
+# Final reminder
+
+All of the above improvements are intended to move ASAB toward a **professional enterprise-grade workflow system** rather than a basic dashboard interface.
+
+Please implement these refinements and provide the **final updated ASAB dashboard** so I can review the full structure and workflow.

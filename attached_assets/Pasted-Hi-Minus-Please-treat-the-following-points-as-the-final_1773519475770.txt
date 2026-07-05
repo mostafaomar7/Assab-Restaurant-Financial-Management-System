@@ -1,0 +1,270 @@
+Hi Minus,
+
+Please treat the following points as the **final structural direction for the ASAB dashboard and modules**.
+
+ASAB at this layer is **not a reporting dashboard**.
+It is primarily a **financial control, reconciliation, and workflow supervision system**.
+
+Because of that, the interface must prioritize **operations review and workflow management**, not financial totals.
+
+Below are the final required adjustments across the system.
+
+---
+
+### 1. Top summary cards across the system
+
+Across the accountant screens and generally across the whole application, we do **not want the top cards to show financial totals** such as:
+
+* total sales
+* total cash
+* total expenses
+* total purchase values
+
+Instead, the top cards should show **operational counts**, for example:
+
+* total submitted operations
+* approved operations
+* rejected operations
+* pending / not yet reviewed operations
+* partially reviewed operations (if applicable)
+
+This principle should be applied consistently across **all modules**.
+
+---
+
+# 2. Sales Module – Accountant Screen
+
+### A. Professional filtering
+
+Add stronger filtering options including:
+
+* brand
+* branch
+* sales channel
+* date range
+* status
+* delivery platform
+* reference / transaction number
+* reviewer / workflow state
+
+### B. Delivery platform drill-down
+
+When the accountant clicks the **delivery app sales number**, a popup/modal should open showing the **full breakdown behind that value**.
+
+This popup must:
+
+* be professionally structured
+* allow editing when permitted
+* update totals automatically when line items are edited.
+
+---
+
+# 3. Expenses Module
+
+Each row in the expenses list may represent:
+
+* a single expense
+* or a batch upload containing multiple invoices.
+
+Clicking a row should open a **detailed breakdown view** showing all invoices included in that upload.
+
+The accountant should be able to:
+
+* review each invoice individually
+* edit when permitted
+* clearly see grouped items
+
+Also add strong filters similar to the Sales module.
+
+Again, **top cards must show counts, not monetary totals**.
+
+---
+
+# 4. Purchases Module
+
+Add filtering by:
+
+* branch
+* supplier
+* brand
+* date range
+* status
+
+Clicking any row must open a **detailed purchase breakdown**.
+
+Important:
+A branch may submit **one invoice from one supplier containing multiple products**.
+
+The accountant must therefore be able to review:
+
+* supplier
+* branch
+* invoice
+* item list
+* quantities
+* prices
+* totals
+
+across **all suppliers and all branches**.
+
+---
+
+# 5. Inventory Module
+
+Each row should represent a **branch inventory record**.
+
+Clicking a branch row should open a page showing **all counted inventory items for that branch**.
+
+Accountant capabilities:
+
+* review
+* edit if needed
+* approve / reject from workflow
+
+### Inventory comparison
+
+Inside the detail page include comparison between:
+
+* current inventory count
+* previous month inventory
+
+The system must show:
+
+* quantity difference
+* percentage variance
+
+Example:
+
+If Pepsi cans were **10 units last month** and **1000 units this month**,
+the system should **flag a potential anomaly** to alert the accountant.
+
+---
+
+# 6. Daily Inventory Review
+
+Daily inventory review should follow the reconciliation formula:
+
+Opening Balance
+
+* Purchases
+  − Sales
+  ± Transfers
+  = Closing Balance
+
+The accountant must be able to review this clearly.
+
+If a shortage exists, it should be possible to **assign it to the responsible employee**.
+
+When entering the **employee number**, the **employee name should appear automatically**.
+
+---
+
+# 7. Waste / Damage Module
+
+Each row belongs to a branch.
+
+Clicking the row should open a **detailed breakdown of all products** in that record.
+
+Each product may include:
+
+* image
+* classification
+* different accountability treatment
+
+The accountant must be able to change classification when needed:
+
+* waste
+* damaged
+
+This classification determines whether the cost is charged to:
+
+* the employee
+* the restaurant
+
+---
+
+# 8. Shifts Module
+
+This module shows the number of shifts per restaurant.
+
+Permissions:
+
+Main Admin / Chief Accountant → can edit
+Accountant → view only
+
+The accountant should see:
+
+* number of shifts
+* shift manager
+* contact details
+* relevant operational information
+
+No approve/reject actions required here.
+
+---
+
+# 9. Employee Account Statement
+
+Filters required:
+
+* employee number
+* branch
+* brand
+
+Brand filter should be available across the whole system because one brand may have multiple branches.
+
+Each row shows:
+
+employee + current balance
+
+Clicking the employee row opens the **full transaction history**.
+
+---
+
+# 10. Cash Custody / Petty Cash
+
+This module should follow the same professional review structure:
+
+* strong filtering
+* drill-down detail views
+* clear handling of pending operations
+* clean editing where allowed
+
+---
+
+# 11. Admin Module – Users
+
+The user creation interface must be clearer and more structured.
+
+User types should be clearly separated, such as:
+
+* new restaurant
+* restaurant owner
+* branch manager
+* accountant
+* chief accountant
+* admin / super admin
+
+The current flow needs clearer role separation.
+
+---
+
+# 12. General workflow principle
+
+Across the system the design should follow this structure:
+
+Summary area → operational counts
+List rows → workflow overview
+Click row → detailed review page
+Strong filtering → essential for accountants
+Editing → available from detail views when appropriate
+
+The system should **help accountants detect anomalies and verify operations**, not just display data.
+
+---
+
+# Final step
+
+Once these adjustments are implemented, please provide me with the **updated and finalized ASAB dashboard** so I can review the full workflow and interface structure.
+
+Looking forward to seeing the **final dashboard version** after applying these changes.

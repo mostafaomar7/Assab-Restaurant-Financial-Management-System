@@ -1,0 +1,58 @@
+asab_dashboards_only(1)(1).html
+رمز · 221.06 KB
+Act as a senior product designer + UX architect + enterprise SaaS dashboard specialist.
+I am attaching a written document that already defines the main dashboard and sub-dashboards for the ASAB system.
+Your job is to convert this written document into a professional initial application prototype that visually explains the product to a designer in a realistic and structured way.
+You must treat the document as the single source of truth.
+Your responsibilities:
+- Read the full document carefully
+- Extract all dashboard structures, modules, sections, user roles, KPIs, workflows, alerts, filters, reporting layers, and operational/financial relationships
+- Convert them into realistic application screens
+- Build a coherent screen hierarchy from the main dashboard down to sub-dashboards and supporting screens
+- Make the result visually premium, modern, and implementation-oriented
+Non-negotiable rules:
+- Do not skip any major item from the document
+- Do not reduce the work into only one generic dashboard
+- Do not produce shallow wireframes
+- Do not create random UI unrelated to the document
+- Do not overuse decorative elements
+- Do not use weak color choices or amateur spacing
+- Do not output vague concepts only
+The output must include:
+1. Product structure / dashboard architecture
+2. Navigation map
+3. Screen inventory
+4. Main dashboard UI
+5. Sub-dashboard UI screens
+6. Supporting screens required to complete the logic
+7. Visual treatment for cards, charts, tables, tabs, filters, alerts, actions, and drill-down areas
+8. Proper role and permission logic if stated in the document
+9. Consistent enterprise-level design language
+Visual direction:
+- Premium B2B SaaS
+- Executive and data-driven
+- Clean but not empty
+- Structured but not rigid
+- Strong readability
+- Professional spacing and typography
+- Suitable for finance + operations software in the restaurant sector
+I want the result to look like a serious software product concept, not a generic admin template.
+For each screen:
+- Name the screen
+- Define its purpose
+- Show the main UI blocks/components
+- Reflect the data hierarchy clearly
+- Keep alignment with the source document
+Final goal:
+I want a professional first visual version of the ASAB dashboards so a UI/UX designer can immediately understand the product direction and start refinement.                      Important warning:
+Do not focus only on visual beauty.
+The priority is preserving business logic, dashboard hierarchy, reporting relationships, and usability.
+A beautiful but logically weak prototype will be considered incorrect.                               Before generating the prototype, first extract:
+- screen architecture
+- user roles
+- dashboard hierarchy
+- key KPIs
+- filters
+- actions
+- drill-down relationships
+Then build the prototype based on that structure.

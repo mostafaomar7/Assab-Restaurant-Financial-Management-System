@@ -1,0 +1,45 @@
+This is a strong refinement and the architectural direction is now much clearer.
+
+The changes around origin visibility, preserving source context across the lifecycle, and separating ERP reference data from the operational workflow are all aligned with the ASAB model.
+
+What you implemented correctly:
+
+• origin is now a real typed field instead of UI decoration  
+• source context is preserved in lists, detail views, and ERP reporting surfaces  
+• corrective operations inherit the original source context  
+• the pipeline remains driven by state logic rather than a visual-only layer  
+• stage-6 is now framed correctly as a reference/reporting endpoint rather than an operational state  
+• the ERP reports area is visually and logically separated from the active workflow
+
+This is the right direction.
+
+Now I want the next refinement pass to focus on three higher-level product controls so the prototype moves from “correct architecture” to “executive-grade financial supervision”:
+
+1. Exception visibility
+The main dashboards should not only show the pipeline.
+They should also surface exceptions clearly, such as:
+- operations stuck too long in review
+- items returned for correction more than once
+- final-approved items still pending ERP export
+- ERP-posted batches with missing imported reports
+- branches with repeated rejection patterns
+
+2. Aggregation logic by module
+ASAB ultimately exports each module as a consolidated accounting-style output for ERP.
+Because of that, the prototype should begin showing not only operation-level lifecycle, but also module-level aggregation states such as:
+- ready for export
+- partially approved
+- blocked by pending items
+- exported
+- ERP reports imported
+
+3. Owner-facing final visibility
+Once ERP reports are imported back into ASAB, the prototype should start distinguishing between:
+- finance/internal review layer
+- owner-facing reporting layer
+
+The owner-facing layer should feel like a final clean read-only reporting destination, not another operational dashboard.
+
+Overall, this iteration is architecturally much stronger.
+
+The next step is to make the dashboards behave less like workflow monitors only, and more like a financial control center that highlights risk, bottlenecks, readiness, and reporting maturity across the full ASAB lifecycle.
