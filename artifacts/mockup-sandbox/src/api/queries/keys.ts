@@ -228,6 +228,18 @@ export const queryKeys = {
     ["platform", "procurement", "orders", id] as const,
   platformProcurementSuppliers: ["platform", "procurement", "suppliers"] as const,
   platformProcurementItems: ["platform", "procurement", "items"] as const,
+  // Purchase-orders bridge (real branch/mobile-app orders)
+  platformPurchaseOrders: (filter?: PurchaseOrdersFilter) =>
+    ["platform", "procurement", "purchase-orders", { filter }] as const,
+  platformPurchaseOrder: (id: string) =>
+    ["platform", "procurement", "purchase-orders", id] as const,
+  platformPurchaseOrdersApprovedByMe: (filter?: PurchaseOrdersFilter) =>
+    ["platform", "procurement", "purchase-orders", "approved-by-me", { filter }] as const,
+  platformPurchaseOrdersGrouped: (by?: "supplier" | "city") =>
+    ["platform", "procurement", "purchase-orders", "grouped", by ?? "supplier"] as const,
+  platformPurchaseOrdersSent: ["platform", "procurement", "purchase-orders", "sent"] as const,
+  platformPurchaseOrderGroup: (groupId: string) =>
+    ["platform", "procurement", "purchase-orders", "groups", groupId] as const,
 
   // ─── Supplier (/api/v1/asab/supplier/*) ────────────────────────────────────
   supplierOverview: ["platform", "supplier", "overview"] as const,
@@ -494,6 +506,29 @@ export interface PlatformProcurementOrdersFilter {
   city?: string;
   supplierId?: string;
   urgency?: "عاجل" | "عادي";
+  page?: number;
+  pageSize?: number;
+}
+
+// Purchase-orders bridge list filter (guide §2.2).
+export interface PurchaseOrdersFilter {
+  // `incoming` = pending + emergency + variance (awaiting decision), or one exact status value.
+  status?:
+    | "incoming"
+    | "pending"
+    | "emergency"
+    | "variance"
+    | "confirmed"
+    | "rejected"
+    | "cancelled"
+    | "cancelled_by_branch"
+    | "cancelled_by_supplier"
+    | "preparing"
+    | "on_the_way"
+    | "delivered"
+    | "closed";
+  branchId?: string;
+  priority?: "high" | "normal";
   page?: number;
   pageSize?: number;
 }

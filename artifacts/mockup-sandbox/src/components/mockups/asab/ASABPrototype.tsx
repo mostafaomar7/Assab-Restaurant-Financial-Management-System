@@ -114,14 +114,28 @@ import {
   useBranchSettingsPlatform,
   // Procurement
   useProcurementOverviewPlatform,
-  useProcurementOrdersPlatform,
   useProcurementSuppliersPlatform,
   useProcurementItemsPlatform,
-  useApproveProcurementOrderPlatform,
-  useBulkApproveProcurementOrdersPlatform,
-  useRejectProcurementOrderPlatform,
-  usePartialRejectProcurementOrderPlatform,
-  useSendProcurementOrderPlatform,
+  // Procurement — purchase-orders bridge (real branch orders)
+  usePurchaseOrders,
+  usePurchaseOrder,
+  useApprovePurchaseOrder,
+  usePartialApprovePurchaseOrder,
+  useRejectPurchaseOrder,
+  useBulkApprovePurchaseOrders,
+  useGroupedPurchaseOrders,
+  useSendGroupedPurchaseOrders,
+  useSentPurchaseOrders,
+  usePurchaseOrderGroup,
+  // Procurement — items/suppliers actions + reports (company layer, existing)
+  useUpdateProcurementItem,
+  useDeleteProcurementItem,
+  useItemPriceHistory,
+  useRateSupplier,
+  useToggleSupplierActive,
+  useUpdateSupplier,
+  useProcurementReports,
+  useDownloadProcurementReport,
   // Supplier
   useSupplierOverview,
   useSupplierOrders,
@@ -551,7 +565,7 @@ const NAV_CONFIG: Record<RoleId, NavEntry[]> = {
     { section:"الرئيسية" },
     { id:"proc-overview",  label:"لوحة التحكم",      icon:<LayoutDashboard size={16}/> },
     { section:"الطلبات" },
-    { id:"proc-new",       label:"الطلبات الجديدة",   icon:<ShoppingCart size={16}/>,  badge:45 },
+    { id:"proc-new",       label:"الطلبات الجديدة",   icon:<ShoppingCart size={16}/> },
     { id:"proc-grouped",   label:"الطلبات المجمعة",   icon:<Package size={16}/> },
     { id:"proc-sent",      label:"المرسلة للموردين",  icon:<Truck size={16}/> },
     { section:"الإدارة" },
@@ -1818,7 +1832,7 @@ function PageRouter({ state, pageProps, adminUsers, setAdminUsers }:{
     if(page==="proc-new")        return <ProcNewOrders {...p}/>;
     if(page==="proc-grouped")    return <ProcGrouped {...p}/>;
     if(page==="proc-sent")       return <ProcSent {...p}/>;
-    if(page==="proc-reports")    return <ReportsPage {...p}/>;
+    if(page==="proc-reports")    return <ProcReports {...p}/>;
     if(page==="proc-items")      return <ProcItems {...p}/>;
     if(page==="proc-suppliers")  return <ProcSuppliers {...p}/>;
     return <SimplePage title={page} icon="🛒" desc=""/>;
@@ -12527,121 +12541,95 @@ function BranchUpload({}: PageProps) {
 function ProcOverview({ navigate }:PageProps) {
   const { t } = useLang();
   const { data: apiOverview } = useProcurementOverviewPlatform();
+  // Real branch orders (bridge). meta.total = live "from branches" count.
+  const { data: incomingPage } = usePurchaseOrders({ status: "incoming", pageSize: 5 });
+  const approveMut = useApprovePurchaseOrder();
   const kpis = (apiOverview as any)?.kpis ?? {};
-  const newOrders     = kpis.newOrdersCount     ?? 0;
-  const fromBranches  = kpis.fromBranchesCount  ?? 0;
-  const consolidated  = kpis.consolidatedCount  ?? 0;
-  const sentToSuppliers = kpis.sentToSuppliersCount ?? 0;
-  const ordersValueK  = kpis.ordersValueHalalas != null ? Math.round(kpis.ordersValueHalalas / 100_000) : 0;
+  // Overview KPIs count the Operations pipeline (halalas). Field names per guide §2.1.
+  const consolidated  = kpis.consolidated  ?? 0;
+  const sentToSuppliers = kpis.sentToSuppliers ?? 0;
+  const ordersValueK  = kpis.ordersValueThisWeek != null ? Math.round(kpis.ordersValueThisWeek / 100_000) : 0;
+  // Real branch-order count from the bridge (falls back to overview kpi).
+  const fromBranches  = (incomingPage as any)?.meta?.total ?? kpis.newOrders ?? 0;
+  const incomingRows  = ((incomingPage as any)?.data ?? []) as any[];
   return (
     <div className="space-y-5">
       <div><h2 className="text-xl font-bold text-gray-800">{t("لوحة تحكم المشتريات","Procurement Dashboard")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("تجميع الطلبات والتنسيق مع الموردين","Consolidate orders and coordinate with suppliers")}</p></div>
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard label={t("طلبات جديدة","New Orders")} value={String(newOrders)} sub={`${t("من","from")} ${fromBranches} ${t("فرع","branches")}`} icon={<ShoppingCart size={18} className="text-red-600"/>} accent="red"/>
+        <KpiCard label={t("طلبات جديدة من الفروع","New Branch Orders")} value={String(fromBranches)} sub={t("بانتظار القرار","awaiting decision")} icon={<ShoppingCart size={18} className="text-red-600"/>} accent="red"/>
         <KpiCard label={t("طلبات مجمعة","Consolidated")} value={String(consolidated)} sub={t("جاهزة للإرسال","ready to send")} icon={<Package size={18} className="text-blue-600"/>} accent="blue"/>
         <KpiCard label={t("أُرسلت للموردين","Sent to Suppliers")} value={String(sentToSuppliers)} sub="" icon={<Truck size={18} className="text-amber-600"/>} accent="amber"/>
         <KpiCard label={t("قيمة الطلبات","Orders Value")} value={`${ordersValueK}K ${t("ر.س","SAR")}`} sub={t("هذا الأسبوع","this week")} icon={<TrendingUp size={18} className="text-purple-600"/>} accent="purple"/>
       </div>
       <Card title={t("الطلبات الجديدة من الفروع","New Orders from Branches")} actions={<Btn size="sm" variant="primary" onClick={()=>navigate("proc-new")}><Package size={12}/> {t("تجميع الطلبات","Consolidate Orders")}</Btn>}>
-        {[{branch:t("فرع الرياض - العليا","Riyadh - Al-Olaya"),items:4,total:4800,urgency:t("عادي","Normal")},{branch:t("فرع جدة - الحمراء","Jeddah - Al-Hamra"),items:6,total:8200,urgency:t("عاجل","Urgent")},{branch:t("فرع مكة - المعابدة","Makkah - Al-Ma'abda"),items:3,total:3100,urgency:t("عادي","Normal")}].map((r,i)=>(
-          <div key={i} className={`px-5 py-4 flex items-center gap-4 border-b border-gray-100 last:border-0 hover:bg-gray-50 ${r.urgency===t("عاجل","Urgent")?"border-r-4 border-r-red-400":""}`}>
-            <div className="flex-1"><p className="font-semibold text-sm text-gray-800">{r.branch}</p><div className="flex items-center gap-2 mt-1"><span className="text-xs text-gray-400">{r.items} {t("أصناف","items")}</span><Badge className={r.urgency===t("عاجل","Urgent")?"bg-red-50 text-red-700":"bg-gray-50 text-gray-600"}>{r.urgency}</Badge></div></div>
-            <span className="font-mono font-bold text-gray-800">{fmtAmt(r.total)} {t("ر.س","SAR")}</span>
-            <div className="flex gap-1.5"><Btn size="sm"><Eye size={12}/> {t("تفاصيل","Details")}</Btn><Btn size="sm" variant="primary"><CheckCircle2 size={12}/> {t("اعتماد","Approve")}</Btn></div>
+        {incomingRows.length===0 && <div className="px-5 py-8 text-center text-sm text-gray-400">{t("لا توجد طلبات جديدة من الفروع","No new branch orders")}</div>}
+        {incomingRows.map((r)=>{
+          const urgent = r.priority==="high";
+          return (
+          <div key={r.id} className={`px-5 py-4 flex items-center gap-4 border-b border-gray-100 last:border-0 hover:bg-gray-50 ${urgent?"border-r-4 border-r-red-400":""}`}>
+            <div className="flex-1"><p className="font-semibold text-sm text-gray-800">{r.branchName ?? r.branchId ?? "—"}</p><div className="flex items-center gap-2 mt-1"><span className="text-xs text-gray-400">{r.totalItems ?? 0} {t("أصناف","items")}</span><Badge className={urgent?"bg-red-50 text-red-700":"bg-gray-50 text-gray-600"}>{urgent?t("عاجل","Urgent"):t("عادي","Normal")}</Badge><span className="text-[11px] text-gray-300 font-mono">{r.orderNumber}</span></div></div>
+            <span className="font-mono font-bold text-gray-800">{fmtAmt(r.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
+            <div className="flex gap-1.5">
+              <Btn size="sm" onClick={()=>navigate("proc-new")}><Eye size={12}/> {t("تفاصيل","Details")}</Btn>
+              <Btn size="sm" variant="primary" disabled={approveMut.isPending} onClick={()=>approveMut.mutate(r.id)}><CheckCircle2 size={12}/> {t("اعتماد","Approve")}</Btn>
+            </div>
           </div>
-        ))}
+          );
+        })}
       </Card>
     </div>
   );
 }
 
-// ── Per-order consumption intelligence data for Procurement Manager
-const PROC_ITEMS: Record<string, PurItem[]> = {
-  "PO-101": [
-    {name:"دجاج طازج",   ordered:50, received:0, unit:"كجم", price:32, histPrice:30, dailyAvg:7,  recommended:49},
-    {name:"أجنحة دجاج",  ordered:30, received:0, unit:"كجم", price:38, histPrice:36, dailyAvg:4,  recommended:28},
-    {name:"صدر دجاج",    ordered:20, received:0, unit:"كجم", price:45, histPrice:43, dailyAvg:3,  recommended:21},
-    {name:"كبدة دجاج",   ordered:10, received:0, unit:"كجم", price:22, histPrice:20, dailyAvg:1,  recommended:7 },
-  ],
-  "PO-102": [
-    {name:"حليب طازج",   ordered:100,received:0, unit:"لتر", price:8,  histPrice:8,  dailyAvg:15, recommended:105},
-    {name:"جبن",          ordered:20, received:0, unit:"كجم", price:35, histPrice:33, dailyAvg:3,  recommended:21},
-  ],
-  "PO-103": [
-    {name:"دقيق أبيض",   ordered:80, received:0, unit:"كجم", price:18, histPrice:18, dailyAvg:11, recommended:77},
-    {name:"سكر ناعم",    ordered:40, received:0, unit:"كجم", price:14, histPrice:14, dailyAvg:6,  recommended:42},
-    {name:"ملح",          ordered:15, received:0, unit:"كجم", price:5,  histPrice:5,  dailyAvg:2,  recommended:14},
-  ],
-  "PO-104": [
-    {name:"دجاج طازج",   ordered:60, received:0, unit:"كجم", price:32, histPrice:30, dailyAvg:9,  recommended:63},
-    {name:"أجنحة دجاج",  ordered:40, received:0, unit:"كجم", price:38, histPrice:36, dailyAvg:5,  recommended:35},
-    {name:"صدر دجاج",    ordered:35, received:0, unit:"كجم", price:45, histPrice:43, dailyAvg:5,  recommended:35},
-    {name:"كبدة دجاج",   ordered:15, received:0, unit:"كجم", price:22, histPrice:20, dailyAvg:2,  recommended:14},
-    {name:"مرق دجاج",    ordered:20, received:0, unit:"لتر", price:12, histPrice:11, dailyAvg:3,  recommended:21},
-    {name:"توابل مشوي",  ordered:5,  received:0, unit:"كجم", price:45, histPrice:40, dailyAvg:0,  recommended:3 },
-  ],
-  "PO-105": [
-    {name:"خضار متنوعة", ordered:30, received:0, unit:"كجم", price:12, histPrice:11, dailyAvg:4,  recommended:28},
-    {name:"طماطم طازجة", ordered:25, received:0, unit:"كجم", price:8,  histPrice:8,  dailyAvg:3,  recommended:21},
-    {name:"خيار طازج",   ordered:15, received:0, unit:"كجم", price:9,  histPrice:9,  dailyAvg:2,  recommended:14},
-    {name:"بصل",          ordered:20, received:0, unit:"كجم", price:6,  histPrice:6,  dailyAvg:3,  recommended:21},
-  ],
-  "PO-106": [
-    {name:"دقيق أبيض",   ordered:100,received:0, unit:"كجم", price:18, histPrice:18, dailyAvg:14, recommended:98},
-    {name:"سكر ناعم",    ordered:50, received:0, unit:"كجم", price:14, histPrice:14, dailyAvg:7,  recommended:49},
-    {name:"خميرة",        ordered:10, received:0, unit:"كجم", price:28, histPrice:25, dailyAvg:1,  recommended:7 },
-  ],
-  "PO-107": [
-    {name:"خضار متنوعة", ordered:35, received:0, unit:"كجم", price:12, histPrice:11, dailyAvg:5,  recommended:35},
-    {name:"طماطم طازجة", ordered:30, received:0, unit:"كجم", price:8,  histPrice:8,  dailyAvg:4,  recommended:28},
-    {name:"فلفل",         ordered:15, received:0, unit:"كجم", price:14, histPrice:13, dailyAvg:2,  recommended:14},
-    {name:"بصل",          ordered:25, received:0, unit:"كجم", price:6,  histPrice:6,  dailyAvg:3,  recommended:21},
-    {name:"ثوم",           ordered:5,  received:0, unit:"كجم", price:22, histPrice:20, dailyAvg:1,  recommended:7 },
-  ],
-};
-
 function ProcNewOrders({}: PageProps) {
   const { t } = useLang();
-  const { data: apiOrdersPage } = useProcurementOrdersPlatform({ status: "pending" });
-  type ProcOrder = { id:string; branch:string; city:string; supplier:string; items:number; total:number; urgency:string; status:"pending"|"approved"; time:string };
-  // Pending purchase orders come from the platform API; empty until the backend returns them.
-  const apiOrdersList = (apiOrdersPage as any)?.data;
-  const [orders, setOrders] = useState<ProcOrder[]>([]);
-  useEffect(() => { if (Array.isArray(apiOrdersList)) setOrders(apiOrdersList as ProcOrder[]); }, [apiOrdersList]);
+  // Incoming branch orders come from the purchase-orders BRIDGE (SAR floats).
+  const { data: apiOrdersPage } = usePurchaseOrders({ status: "incoming" });
+  const rows = (((apiOrdersPage as any)?.data ?? []) as any[]).map((r)=>({
+    id: r.id as string,
+    orderNumber: (r.orderNumber ?? r.id) as string,
+    branch: (r.branchName ?? r.branchId ?? "—") as string,
+    supplierId: (r.supplierId ?? "") as string,
+    supplier: (r.supplierId ? `${t("مورد","Supplier")} ${String(r.supplierId).slice(0,6)}` : t("غير محدد","Unassigned")) as string,
+    items: (r.totalItems ?? 0) as number,
+    total: (r.totalAmount ?? 0) as number,
+    urgency: (r.priority==="high" ? "عاجل" : "عادي") as string,
+  }));
   const [groupBy, setGroupBy] = useState<"branch"|"supplier">("branch");
   const [expandedId, setExpandedId] = useState<string|null>(null);
-  const [filterCity, setFilterCity]         = useState("الكل");
-  const [filterSupplier, setFilterSupplier] = useState("الكل");
+  const [filterBranch, setFilterBranch]     = useState("الكل");
   const [filterUrgency, setFilterUrgency]   = useState("الكل");
-  const [partialRejectId, setPartialRejectId] = useState<string|null>(null);
-  const [partialRejectReason, setPartialRejectReason] = useState("");
+  const [approvedCount, setApprovedCount]   = useState(0);
+  // Reject editors — only one order open at a time.
+  const [editMode, setEditMode] = useState<null|"partial"|"reject">(null);
+  const [qtyMap, setQtyMap] = useState<Record<string, number>>({});
+  const [partialNote, setPartialNote] = useState("");
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectNote, setRejectNote] = useState("");
 
-  const approveMut        = useApproveProcurementOrderPlatform();
-  const bulkApproveMut    = useBulkApproveProcurementOrdersPlatform();
-  const rejectMut         = useRejectProcurementOrderPlatform();
-  const partialRejectMut  = usePartialRejectProcurementOrderPlatform();
-  // Optimistic local update + live mutation against /company/me/procurement/orders/*.
-  const approveOne      = (id:string)     => { setOrders(p=>p.map(o=>o.id===id?{...o,status:"approved" as const}:o)); approveMut.mutate({ id }); };
-  const approveByBranch = (branch:string) => { setOrders(p=>p.map(o=>o.branch===branch&&o.status==="pending"?{...o,status:"approved" as const}:o)); bulkApproveMut.mutate({ branch }); };
-  const approveBySupplier = (sup:string)  => { setOrders(p=>p.map(o=>o.supplier===sup&&o.status==="pending"?{...o,status:"approved" as const}:o)); bulkApproveMut.mutate({ supplier: sup }); };
-  const approveAll      = ()              => { const ids = orders.filter(o=>o.status==="pending").map(o=>o.id); setOrders(p=>p.map(o=>({...o,status:"approved" as const}))); bulkApproveMut.mutate({ orderIds: ids }); };
-  const rejectOne       = (id:string)     => { setOrders(p=>p.filter(o=>o.id!==id)); rejectMut.mutate({ id, reason: t("رفض من المشتريات","Rejected by procurement") }); };
-  const confirmPartialReject = (id:string) => { partialRejectMut.mutate({ id, reason: partialRejectReason || t("رفض جزئي","Partial reject") }); setPartialRejectId(null); setPartialRejectReason(""); setExpandedId(null); };
+  // Consumption detail is fetched only for the currently-expanded order.
+  const detailQ = usePurchaseOrder(expandedId ?? undefined);
+  const detailItems = ((detailQ.data as any)?.items ?? []) as any[];
 
-  const cityList     = ["الكل",...[...new Set(orders.map(o=>o.city))]];
-  const supplierList = ["الكل",...[...new Set(orders.map(o=>o.supplier))]];
+  const approveMut  = useApprovePurchaseOrder();
+  const bulkMut     = useBulkApprovePurchaseOrders();
+  const rejectMut   = useRejectPurchaseOrder();
+  const partialMut  = usePartialApprovePurchaseOrder();
 
-  // Apply filters
-  const filteredOrders = orders.filter(o=>{
-    if(filterCity!=="الكل" && o.city!==filterCity) return false;
-    if(filterSupplier!=="الكل" && o.supplier!==filterSupplier) return false;
+  const approveOne = (id:string) => { approveMut.mutate(id, { onSuccess:()=>setApprovedCount(c=>c+1) }); setExpandedId(null); };
+  const approveList = (ids:string[]) => { if(ids.length) bulkMut.mutate(ids, { onSuccess:(res:any)=>setApprovedCount(c=>c+(res?.count ?? res?.approved?.length ?? ids.length)) }); };
+  const openReject = (id:string) => { setExpandedId(id); setEditMode("reject"); setRejectReason(""); setRejectNote(""); };
+  const confirmReject = (id:string) => { const reason=[rejectReason,rejectNote].filter(Boolean).join(" — ")||t("رفض من المشتريات","Rejected by procurement"); rejectMut.mutate({ id, reason }, { onSuccess:()=>{ setEditMode(null); setExpandedId(null); } }); };
+  const openPartial = (id:string) => { setExpandedId(id); setEditMode("partial"); setPartialNote(""); setQtyMap({}); };
+  const confirmPartial = (id:string) => { const items=detailItems.map((it:any)=>({ orderItemId: it.orderItemId, quantity: qtyMap[it.orderItemId] ?? it.quantityOrdered ?? 0 })); partialMut.mutate({ id, items, note: partialNote || undefined }, { onSuccess:()=>{ setEditMode(null); setExpandedId(null); } }); };
+
+  const branchList = ["الكل",...[...new Set(rows.map(o=>o.branch))]];
+  const filteredOrders = rows.filter(o=>{
+    if(filterBranch!=="الكل" && o.branch!==filterBranch) return false;
     if(filterUrgency!=="الكل" && o.urgency!==filterUrgency) return false;
     return true;
   });
-
-  const pending = filteredOrders.filter(o=>o.status==="pending");
-
-  // Group orders
+  const pending = filteredOrders;
   const groupKeys = [...new Set(filteredOrders.map(o=>groupBy==="branch"?o.branch:o.supplier))];
 
   return (
@@ -12651,28 +12639,22 @@ function ProcNewOrders({}: PageProps) {
           <h2 className="text-xl font-bold text-gray-800">{t("الطلبات الجديدة","New Orders")}</h2>
           <p className="text-gray-400 text-sm mt-0.5">{t("راجع الاستهلاك قبل الاعتماد — اعتمد فردياً أو للفرع/المورد دفعةً واحدة","Review consumption before approving — approve individually or per branch/supplier in bulk")}</p>
         </div>
-        {pending.length>0 && <Btn variant="primary" size="sm" onClick={approveAll}><Package size={12}/> {t("اعتماد الكل","Approve All")} ({pending.length})</Btn>}
+        {pending.length>0 && <Btn variant="primary" size="sm" disabled={bulkMut.isPending} onClick={()=>approveList(pending.map(o=>o.id))}><Package size={12}/> {t("اعتماد الكل","Approve All")} ({pending.length})</Btn>}
       </div>
 
       <div className="grid grid-cols-3 gap-4">
         <KpiCard label={t("طلبات جديدة معلقة","Pending New Orders")} value={String(pending.length)} sub={t("من الفروع","from branches")} icon={<ShoppingCart size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label={t("تم اعتمادها","Approved")} value={String(orders.filter(o=>o.status==="approved").length)} sub={t("هذا الجلسة","this session")} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
-        <KpiCard label={t("الموردون المعنيون","Relevant Suppliers")} value={String(new Set(pending.map(o=>o.supplier)).size)} sub={t("يحتاجون موافقة","need approval")} icon={<Truck size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label={t("تم اعتمادها","Approved")} value={String(approvedCount)} sub={t("هذه الجلسة","this session")} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
+        <KpiCard label={t("الموردون المعنيون","Relevant Suppliers")} value={String(new Set(pending.map(o=>o.supplierId).filter(Boolean)).size)} sub={t("يحتاجون موافقة","need approval")} icon={<Truck size={18} className="text-blue-600"/>} accent="blue"/>
       </div>
 
       {/* Filters panel */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir="rtl">
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("المدينة","City")}</label>
-            <select value={filterCity} onChange={e=>setFilterCity(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {cityList.map(c=><option key={c}>{c}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("المورد","Supplier")}</label>
-            <select value={filterSupplier} onChange={e=>setFilterSupplier(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {supplierList.map(s=><option key={s}>{s}</option>)}
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الفرع","Branch")}</label>
+            <select value={filterBranch} onChange={e=>setFilterBranch(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+              {branchList.map(c=><option key={c}>{c}</option>)}
             </select>
           </div>
           <div>
@@ -12684,10 +12666,10 @@ function ProcNewOrders({}: PageProps) {
             </select>
           </div>
         </div>
-        {(filterCity!=="الكل"||filterSupplier!=="الكل"||filterUrgency!=="الكل") && (
-          <button onClick={()=>{setFilterCity("الكل");setFilterSupplier("الكل");setFilterUrgency("الكل");}}
+        {(filterBranch!=="الكل"||filterUrgency!=="الكل") && (
+          <button onClick={()=>{setFilterBranch("الكل");setFilterUrgency("الكل");}}
             className="mt-2 text-xs text-purple-600 hover:underline flex items-center gap-1">
-            <RotateCcw size={11}/> {t("مسح الفلاتر","Clear filters")} · {t("يظهر","Showing")} {filteredOrders.length} {t("من","of")} {orders.length} {t("طلب","orders")}
+            <RotateCcw size={11}/> {t("مسح الفلاتر","Clear filters")} · {t("يظهر","Showing")} {filteredOrders.length} {t("من","of")} {rows.length} {t("طلب","orders")}
           </button>
         )}
       </div>
@@ -12718,9 +12700,9 @@ function ProcNewOrders({}: PageProps) {
 
       {/* Grouped orders */}
       <div className="space-y-3">
+        {groupKeys.length===0 && <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-10 text-center text-sm text-gray-400">{t("لا توجد طلبات جديدة من الفروع","No new branch orders")}</div>}
         {groupKeys.map(groupKey=>{
           const groupOrders = filteredOrders.filter(o=>(groupBy==="branch"?o.branch:o.supplier)===groupKey);
-          const groupPending = groupOrders.filter(o=>o.status==="pending");
           const groupTotal   = groupOrders.reduce((s,o)=>s+o.total,0);
           return (
             <div key={groupKey} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -12729,52 +12711,48 @@ function ProcNewOrders({}: PageProps) {
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-gray-800 text-sm">{groupKey}</span>
                   <Badge className="bg-blue-50 text-blue-700 text-[10px]">{groupOrders.length} {t("طلب","orders")}</Badge>
-                  {groupPending.length>0 && <Badge className="bg-amber-50 text-amber-700 text-[10px]">{groupPending.length} {t("معلق","pending")}</Badge>}
                   <span className="font-mono font-bold text-gray-600 text-sm">{fmtAmt(groupTotal)} {t("ر.س","SAR")}</span>
                 </div>
-                {groupPending.length>1 && (
-                  <Btn size="sm" variant="success"
-                    onClick={()=>groupBy==="branch"?approveByBranch(groupKey):approveBySupplier(groupKey)}>
-                    <CheckCircle2 size={11}/> {t("اعتماد الكل","Approve All")} ({groupPending.length} {t("طلب","orders")})
+                {groupOrders.length>1 && (
+                  <Btn size="sm" variant="success" disabled={bulkMut.isPending}
+                    onClick={()=>approveList(groupOrders.map(o=>o.id))}>
+                    <CheckCircle2 size={11}/> {t("اعتماد الكل","Approve All")} ({groupOrders.length} {t("طلب","orders")})
                   </Btn>
                 )}
               </div>
               {/* Orders in group */}
               {groupOrders.map((r)=>{
-                const procItems = PROC_ITEMS[r.id] || [];
-                const hasAnomalies = procItems.some(it=>Math.abs(it.ordered-it.recommended)>5||it.price-it.histPrice>2);
+                const isOpen = expandedId===r.id;
                 return (
-                <div key={r.id} className={`border-b border-gray-100 last:border-0 ${r.urgency==="عاجل"&&r.status==="pending"?"border-r-4 border-r-red-400":""}`}>
-                  <div className={`px-5 py-3.5 flex items-center gap-4 hover:bg-gray-50 cursor-pointer ${expandedId===r.id?"bg-amber-50/20":""}`}
-                    onClick={()=>setExpandedId(expandedId===r.id?null:r.id)}>
+                <div key={r.id} className={`border-b border-gray-100 last:border-0 ${r.urgency==="عاجل"?"border-r-4 border-r-red-400":""}`}>
+                  <div className={`px-5 py-3.5 flex items-center gap-4 hover:bg-gray-50 cursor-pointer ${isOpen?"bg-amber-50/20":""}`}
+                    onClick={()=>{ setExpandedId(isOpen?null:r.id); setEditMode(null); }}>
                   <div className="flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono text-xs text-purple-600">{r.id}</span>
+                      <span className="font-mono text-xs text-purple-600">{r.orderNumber}</span>
                       <span className="text-gray-300">·</span>
                       <span className="text-xs text-gray-600">{groupBy==="branch"?r.supplier:r.branch}</span>
                       <Badge className={r.urgency==="عاجل"?"bg-red-50 text-red-700 text-[10px]":"bg-gray-50 text-gray-600 text-[10px]"}>{r.urgency}</Badge>
-                      {hasAnomalies && r.status==="pending" && <Badge className="bg-orange-50 text-orange-700 border border-orange-200 text-[10px]">⚠ {t("تحقق من الاستهلاك","Check Consumption")}</Badge>}
                     </div>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{r.items} {t("أصناف","items")} · {r.time}</p>
+                    <p className="text-[11px] text-gray-400 mt-0.5">{r.items} {t("أصناف","items")}</p>
                   </div>
                   <span className="font-mono font-bold text-gray-800 text-sm">{fmtAmt(r.total)} {t("ر.س","SAR")}</span>
                   <div className="flex gap-1.5 flex-shrink-0" onClick={e=>e.stopPropagation()}>
-                    {r.status==="pending"
-                      ? <Btn size="sm" variant="success" onClick={()=>approveOne(r.id)}><CheckCircle2 size={12}/> {t("اعتماد","Approve")}</Btn>
-                      : <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px]">✓ {t("معتمد","Approved")}</Badge>
-                    }
+                    <Btn size="sm" variant="success" disabled={approveMut.isPending} onClick={()=>approveOne(r.id)}><CheckCircle2 size={12}/> {t("اعتماد","Approve")}</Btn>
                   </div>
-                  {expandedId===r.id?<ChevronUp size={13} className="text-gray-400 flex-shrink-0"/>:<ChevronDown size={13} className="text-gray-400 flex-shrink-0"/>}
+                  {isOpen?<ChevronUp size={13} className="text-gray-400 flex-shrink-0"/>:<ChevronDown size={13} className="text-gray-400 flex-shrink-0"/>}
                   </div>
                   {/* Consumption intelligence expansion panel */}
-                  {expandedId===r.id && procItems.length>0 && (
+                  {isOpen && (
                     <div className="px-5 pb-5 bg-amber-50/10 space-y-3 border-t border-amber-100">
                       <div className="flex items-center gap-2 mt-3 mb-1">
                         <BarChart3 size={13} className="text-amber-600"/>
                         <p className="text-xs font-bold text-amber-900">{t("بيانات الاستهلاك — راجع قبل الاعتماد","Consumption Data — Review before approving")}</p>
-                        <span className="text-[10px] text-amber-600 mr-auto">{r.branch} · {r.supplier}</span>
+                        <span className="text-[10px] text-amber-600 mr-auto">{r.branch}</span>
                       </div>
-                      {/* Consumption table: مطلوب / استهلاك يومي / موصى به / سعر */}
+                      {detailQ.isLoading && <p className="text-xs text-gray-400 py-2">{t("جاري تحميل التفاصيل...","Loading details...")}</p>}
+                      {!detailQ.isLoading && detailItems.length===0 && <p className="text-xs text-gray-400 py-2">{t("لا توجد تفاصيل أصناف","No item details available")}</p>}
+                      {detailItems.length>0 && (
                       <table className="w-full border border-amber-100 rounded-xl overflow-hidden text-xs" dir="rtl">
                         <thead className="bg-amber-50">
                           <tr>
@@ -12783,32 +12761,32 @@ function ProcNewOrders({}: PageProps) {
                             <th className="px-3 py-2 text-center font-bold text-gray-800">{t("مطلوب","Ordered")}</th>
                             <th className="px-3 py-2 text-center bg-amber-100/60 text-amber-700">{t("استهلاك يومي","Daily Avg")}</th>
                             <th className="px-3 py-2 text-center bg-amber-100/60 text-amber-700">{t("موصى به (7 أيام)","Recommended (7d)")}</th>
-                            <th className="px-3 py-2 text-center bg-sky-50/80 text-sky-700">{t("آخر سعر","Last Price")}</th>
-                            <th className="px-3 py-2 text-center">{t("السعر الحالي","Current Price")}</th>
+                            <th className="px-3 py-2 text-center bg-sky-50/80 text-sky-700">{t("المخزون المتبقي","Remaining")}</th>
+                            <th className="px-3 py-2 text-center">{t("سعر الوحدة","Unit Price")}</th>
                             <th className="px-3 py-2 text-center">{t("التقييم","Assessment")}</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-amber-50 bg-white">
-                          {procItems.map((it,pi)=>{
-                            const qtyDiff   = it.ordered - it.recommended;
-                            const priceDiff = it.price - it.histPrice;
-                            const qtyStatus = Math.abs(qtyDiff)<=5?"ok":qtyDiff>5?"over":"under";
+                          {detailItems.map((it:any,pi:number)=>{
+                            const ordered = it.quantityOrdered ?? 0;
+                            const recommended = it.dailyConsumption!=null ? Math.round(it.dailyConsumption*7) : null;
+                            const qtyDiff = recommended!=null ? ordered - recommended : 0;
+                            const qtyStatus = recommended==null ? "na" : Math.abs(qtyDiff)<=5?"ok":qtyDiff>5?"over":"under";
                             return (
-                              <tr key={pi} className={qtyStatus==="over"?"bg-orange-50/40":qtyStatus==="under"?"bg-blue-50/30":""}>
+                              <tr key={it.orderItemId ?? pi} className={qtyStatus==="over"?"bg-orange-50/40":qtyStatus==="under"?"bg-blue-50/30":""}>
                                 <td className="px-3 py-2 font-semibold text-gray-800">{it.name}</td>
-                                <td className="px-3 py-2 text-center text-gray-500">{it.unit}</td>
-                                <td className="px-3 py-2 text-center font-mono font-bold text-gray-800">{it.ordered}</td>
-                                <td className="px-3 py-2 text-center font-mono text-amber-700 bg-amber-50/30">{it.dailyAvg}</td>
+                                <td className="px-3 py-2 text-center text-gray-500">{it.unit ?? "—"}</td>
+                                <td className="px-3 py-2 text-center font-mono font-bold text-gray-800">{ordered}</td>
+                                <td className="px-3 py-2 text-center font-mono text-amber-700 bg-amber-50/30">{it.dailyConsumption ?? "—"}</td>
                                 <td className="px-3 py-2 text-center font-mono bg-amber-50/30">
-                                  <span className={`font-bold ${qtyStatus==="over"?"text-orange-600":qtyStatus==="under"?"text-blue-600":"text-emerald-600"}`}>{it.recommended}</span>
+                                  <span className={`font-bold ${qtyStatus==="over"?"text-orange-600":qtyStatus==="under"?"text-blue-600":qtyStatus==="ok"?"text-emerald-600":"text-gray-400"}`}>{recommended ?? "—"}</span>
                                 </td>
-                                <td className="px-3 py-2 text-center font-mono text-gray-500 bg-sky-50/20">{it.histPrice} {t("ر.س","SAR")}</td>
-                                <td className={`px-3 py-2 text-center font-mono font-semibold ${priceDiff>2?"text-red-600":"text-gray-800"}`}>
-                                  {it.price} {t("ر.س","SAR")}
-                                  {priceDiff>2 && <div className="text-[9px] text-red-500">↑ {t("ارتفع","Increased")}</div>}
-                                </td>
+                                <td className="px-3 py-2 text-center font-mono text-gray-500 bg-sky-50/20">{it.remainingBalance ?? "—"}</td>
+                                <td className="px-3 py-2 text-center font-mono font-semibold text-gray-800">{fmtAmt(it.unitPrice ?? 0)} {t("ر.س","SAR")}</td>
                                 <td className="px-3 py-2 text-center">
-                                  {qtyStatus==="ok"
+                                  {qtyStatus==="na"
+                                    ? <span className="text-gray-300">—</span>
+                                    : qtyStatus==="ok"
                                     ? <Badge className="bg-emerald-50 text-emerald-700 text-[10px]">✓ {t("مناسب","OK")}</Badge>
                                     : qtyStatus==="over"
                                       ? <Badge className="bg-orange-50 text-orange-700 border border-orange-200 text-[10px]">↑ {t("أعلى بـ","High by ")}{qtyDiff}</Badge>
@@ -12820,56 +12798,63 @@ function ProcNewOrders({}: PageProps) {
                           })}
                         </tbody>
                       </table>
-                      {/* Summary alerts */}
-                      {procItems.some(it=>it.ordered-it.recommended>5) && (
-                        <div className="p-2.5 bg-orange-50 border border-orange-200 rounded-xl flex items-center gap-2">
-                          <AlertTriangle size={12} className="text-orange-600 flex-shrink-0"/>
-                          <p className="text-[11px] text-orange-800">
-                            <strong>{t("تحذير:","Warning:")}</strong> {procItems.filter(it=>it.ordered-it.recommended>5).map(it=>`${it.name} (${t("مطلوب","ordered")} ${it.ordered} / ${t("موصى به","rec.")} ${it.recommended})`).join(" · ")}
-                          </p>
-                        </div>
                       )}
-                      {procItems.some(it=>it.price-it.histPrice>2) && (
-                        <div className="p-2.5 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2">
-                          <AlertTriangle size={12} className="text-red-500 flex-shrink-0"/>
-                          <p className="text-[11px] text-red-700">
-                            <strong>{t("سعر مرتفع:","High Price:")}</strong> {procItems.filter(it=>it.price-it.histPrice>2).map(it=>`${it.name} (${it.price} ${t("بدلاً من","vs.")} ${it.histPrice} ${t("ر.س","SAR")})`).join(" · ")}
-                          </p>
+                      {/* Actions / reject editors */}
+                      {editMode==="partial" ? (
+                        <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 space-y-2 mt-1" dir="rtl">
+                          <p className="text-xs font-bold text-orange-800">⚠ {t("اعتماد جزئي — عدّل الكمية المعتمدة لكل صنف (صفر = رفض الصنف)","Partial approve — set confirmed qty per item (0 = reject line)")}</p>
+                          <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                            {detailItems.map((it:any)=>(
+                              <div key={it.orderItemId} className="flex items-center gap-2 text-xs">
+                                <span className="flex-1 text-gray-700">{it.name} <span className="text-gray-400">({t("مطلوب","ordered")} {it.quantityOrdered ?? 0} {it.unit ?? ""})</span></span>
+                                <input type="number" min={0} max={it.quantityOrdered ?? undefined} dir="ltr"
+                                  value={qtyMap[it.orderItemId] ?? it.quantityOrdered ?? 0}
+                                  onChange={e=>setQtyMap(m=>({...m,[it.orderItemId]: Math.max(0, Number(e.target.value)||0)}))}
+                                  className="w-24 text-sm border border-orange-200 rounded-lg px-2 py-1 bg-white outline-none text-center"/>
+                              </div>
+                            ))}
+                          </div>
+                          <input value={partialNote} onChange={e=>setPartialNote(e.target.value)}
+                            placeholder={t("سبب / ملاحظة (اختياري)...","Reason / note (optional)...")}
+                            className="w-full text-sm border border-orange-200 rounded-lg px-3 py-2 bg-white outline-none"/>
+                          <div className="flex gap-2">
+                            <Btn size="sm" variant="danger" disabled={partialMut.isPending||detailItems.length===0} onClick={()=>confirmPartial(r.id)}>
+                              <ThumbsDown size={11}/> {t("تأكيد الاعتماد الجزئي","Confirm Partial Approve")}
+                            </Btn>
+                            <Btn size="sm" onClick={()=>setEditMode(null)}>{t("إلغاء","Cancel")}</Btn>
+                          </div>
                         </div>
-                      )}
-                      {r.status==="pending" && (
-                        partialRejectId===r.id ? (
-                          <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 space-y-2 mt-1" dir="rtl">
-                            <p className="text-xs font-bold text-orange-800">⚠ {t("رفض جزئي — اذكر سبب الرفض وحدد الأصناف","Partial Reject — state rejection reason and specify items")}</p>
-                            <select className="w-full text-sm border border-orange-200 rounded-lg px-3 py-2 bg-white">
-                              <option value="">{t("— اختر سبب الرفض الجزئي —","— Select partial rejection reason —")}</option>
-                              <option>{t("سعر أعلى من المتفق عليه","Price above agreed rate")}</option>
-                              <option>{t("كمية أعلى من الحاجة الفعلية","Quantity exceeds actual need")}</option>
-                              <option>{t("صنف غير مطلوب حالياً","Item not needed currently")}</option>
-                              <option>{t("مشكلة في المورد","Supplier issue")}</option>
-                              <option>{t("أخرى","Other")}</option>
-                            </select>
-                            <input value={partialRejectReason} onChange={e=>setPartialRejectReason(e.target.value)}
-                              placeholder={t("ملاحظة إضافية (اختياري)...","Additional note (optional)...")}
-                              className="w-full text-sm border border-orange-200 rounded-lg px-3 py-2 bg-white outline-none"/>
-                            <div className="flex gap-2">
-                              <Btn size="sm" variant="danger" onClick={()=>confirmPartialReject(r.id)}>
-                                <ThumbsDown size={11}/> {t("تأكيد الرفض الجزئي","Confirm Partial Reject")}
-                              </Btn>
-                              <Btn size="sm" onClick={()=>setPartialRejectId(null)}>{t("إلغاء","Cancel")}</Btn>
-                            </div>
+                      ) : editMode==="reject" ? (
+                        <div className="bg-red-50 border border-red-200 rounded-xl p-3 space-y-2 mt-1" dir="rtl">
+                          <p className="text-xs font-bold text-red-800">⛔ {t("رفض كلي — اذكر سبب الرفض","Full reject — state the rejection reason")}</p>
+                          <select value={rejectReason} onChange={e=>setRejectReason(e.target.value)} className="w-full text-sm border border-red-200 rounded-lg px-3 py-2 bg-white">
+                            <option value="">{t("— اختر سبب الرفض —","— Select rejection reason —")}</option>
+                            <option>{t("سعر أعلى من المتفق عليه","Price above agreed rate")}</option>
+                            <option>{t("كمية أعلى من الحاجة الفعلية","Quantity exceeds actual need")}</option>
+                            <option>{t("صنف غير مطلوب حالياً","Item not needed currently")}</option>
+                            <option>{t("مشكلة في المورد","Supplier issue")}</option>
+                            <option>{t("أخرى","Other")}</option>
+                          </select>
+                          <input value={rejectNote} onChange={e=>setRejectNote(e.target.value)}
+                            placeholder={t("ملاحظة إضافية (اختياري)...","Additional note (optional)...")}
+                            className="w-full text-sm border border-red-200 rounded-lg px-3 py-2 bg-white outline-none"/>
+                          <div className="flex gap-2">
+                            <Btn size="sm" variant="danger" disabled={rejectMut.isPending} onClick={()=>confirmReject(r.id)}>
+                              <ThumbsDown size={11}/> {t("تأكيد الرفض","Confirm Reject")}
+                            </Btn>
+                            <Btn size="sm" onClick={()=>setEditMode(null)}>{t("إلغاء","Cancel")}</Btn>
                           </div>
-                        ) : (
-                          <div className="flex gap-2 pt-1 flex-wrap">
-                            <Btn size="sm" variant="success" onClick={()=>{ approveOne(r.id); setExpandedId(null); }}><CheckCircle2 size={12}/> {t("اعتماد بعد المراجعة","Approve After Review")}</Btn>
-                            <button onClick={()=>setPartialRejectId(r.id)}
-                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 text-orange-700 border border-orange-200 text-xs font-semibold hover:bg-orange-100">
-                              <AlertTriangle size={11}/> {t("رفض جزئي","Partial Reject")}
-                            </button>
-                            <Btn size="sm" variant="danger" onClick={()=>rejectOne(r.id)}><ThumbsDown size={12}/> {t("رفض كلي","Full Reject")}</Btn>
-                            <Btn size="sm" onClick={()=>setExpandedId(null)}>{t("إغلاق","Close")}</Btn>
-                          </div>
-                        )
+                        </div>
+                      ) : (
+                        <div className="flex gap-2 pt-1 flex-wrap">
+                          <Btn size="sm" variant="success" disabled={approveMut.isPending} onClick={()=>approveOne(r.id)}><CheckCircle2 size={12}/> {t("اعتماد بعد المراجعة","Approve After Review")}</Btn>
+                          <button onClick={()=>openPartial(r.id)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-orange-50 text-orange-700 border border-orange-200 text-xs font-semibold hover:bg-orange-100">
+                            <AlertTriangle size={11}/> {t("اعتماد/رفض جزئي","Partial")}
+                          </button>
+                          <Btn size="sm" variant="danger" onClick={()=>openReject(r.id)}><ThumbsDown size={12}/> {t("رفض كلي","Full Reject")}</Btn>
+                          <Btn size="sm" onClick={()=>setExpandedId(null)}>{t("إغلاق","Close")}</Btn>
+                        </div>
                       )}
                     </div>
                   )}
@@ -12883,18 +12868,20 @@ function ProcNewOrders({}: PageProps) {
   );
 }
 
-function ProcGrouped({}: PageProps) {
+function ProcGrouped({ navigate }: PageProps) {
   const { t } = useLang();
-  const { data: apiGroupedSup } = useProcurementOrdersPlatform({ status: "approved", groupBy: "supplier" });
   const [viewMode, setViewMode] = useState<"supplier"|"city">("supplier");
   const [expandedGroup, setExpandedGroup] = useState<string|null>(null);
-  const sendMut = useSendProcurementOrderPlatform();
+  const [assignSupplier, setAssignSupplier] = useState<Record<string,string>>({});
+  // Live consolidation preview from the bridge (grouped by supplier or city).
+  const { data: grouped } = useGroupedPurchaseOrders(viewMode);
+  const { data: suppliersRaw } = useProcurementSuppliersPlatform();
+  const sendMut = useSendGroupedPurchaseOrders();
 
-  // Consolidated supplier & city groups come from the platform API; empty until returned.
-  const apiSupGroupsList = (apiGroupedSup as any)?.supplierGroups ?? (apiGroupedSup as any)?.data;
-  const supplierGroups = ((apiSupGroupsList as any[])?.length > 0 ? (apiSupGroupsList as any) : []) as any[];
-
-  const cityGroups = (((apiGroupedSup as any)?.cityGroups as any[]) ?? []) as any[];
+  const supplierGroups = (((grouped as any)?.suppliers ?? []) as any[]);
+  const unassigned     = (((grouped as any)?.unassignedOrders ?? []) as any[]);
+  const cityGroups     = (((grouped as any)?.cities ?? []) as any[]);
+  const supplierOpts   = ((suppliersRaw as any[]) ?? []);
 
   return (
     <div className="space-y-5">
@@ -12905,7 +12892,7 @@ function ProcGrouped({}: PageProps) {
         </div>
         <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
           {(["supplier","city"] as const).map(m=>(
-            <button key={m} onClick={()=>setViewMode(m)}
+            <button key={m} onClick={()=>{ setViewMode(m); setExpandedGroup(null); }}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${viewMode===m?"bg-white text-gray-800 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
               {m==="supplier"?t("بالمورد","By Supplier"):t("بالمدينة","By City")}
             </button>
@@ -12915,27 +12902,30 @@ function ProcGrouped({}: PageProps) {
 
       {viewMode==="supplier" ? (
         <div className="space-y-3">
+          {supplierGroups.length===0 && <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-10 text-center text-sm text-gray-400">{t("لا توجد طلبات جاهزة للتجميع","No orders ready to consolidate")}</div>}
           {supplierGroups.map((g,i)=>{
-            const hasOverCapacity = g.items.some((it:any)=>it.totalQty>it.maxCapacity);
+            const key = g.supplierId ?? String(i);
+            const hasOverCapacity = g.capacityExceeded === true;
             return (
-              <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+              <div key={key} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
                 <div className="px-5 py-4 flex items-center gap-4 cursor-pointer hover:bg-gray-50"
-                  onClick={()=>setExpandedGroup(expandedGroup===g.key?null:g.key)}>
+                  onClick={()=>setExpandedGroup(expandedGroup===key?null:key)}>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="font-semibold text-sm text-gray-800">{g.key}</p>
+                      <p className="font-semibold text-sm text-gray-800">{g.supplierName ?? t("مورد","Supplier")}</p>
+                      {g.urgentCount>0 && <Badge className="bg-amber-50 text-amber-700 text-[10px]">{g.urgentCount} {t("عاجل","urgent")}</Badge>}
                       {hasOverCapacity && <Badge className="bg-red-50 text-red-700 border border-red-200 text-[10px]">⚠ {t("تجاوز الطاقة","Over Capacity")}</Badge>}
                     </div>
-                    <p className="text-xs text-gray-400 mt-1">{g.branches} {t("فرع","branches")} · {g.items.length} {t("أصناف","items")} · {g.city}</p>
+                    <p className="text-xs text-gray-400 mt-1">{g.branchesCount ?? 0} {t("فرع","branches")} · {g.itemsCount ?? g.items?.length ?? 0} {t("أصناف","items")} · {(g.cities ?? []).join("، ") || "—"}</p>
                   </div>
-                  <span className="font-mono font-bold text-gray-800">{fmtAmt(g.total)} {t("ر.س","SAR")}</span>
+                  <span className="font-mono font-bold text-gray-800">{fmtAmt(g.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
                   <div className="flex gap-1.5" onClick={e=>e.stopPropagation()}>
-                    <Btn size="sm" onClick={()=>setExpandedGroup(expandedGroup===g.key?null:g.key)}><Eye size={12}/> {t("تفاصيل","Details")}</Btn>
-                    <Btn size="sm" variant="primary" onClick={()=>sendMut.mutate({ groupId: g.groupId ?? g.key })} disabled={sendMut.isPending}><Truck size={12}/> {t("إرسال للمورد","Send to Supplier")}</Btn>
+                    <Btn size="sm" onClick={()=>setExpandedGroup(expandedGroup===key?null:key)}><Eye size={12}/> {t("تفاصيل","Details")}</Btn>
+                    <Btn size="sm" variant="primary" onClick={()=>sendMut.mutate({ supplierId: g.supplierId })} disabled={sendMut.isPending||!g.supplierId}><Truck size={12}/> {t("إرسال للمورد","Send to Supplier")}</Btn>
                   </div>
-                  {expandedGroup===g.key?<ChevronUp size={13} className="text-gray-400 flex-shrink-0"/>:<ChevronDown size={13} className="text-gray-400 flex-shrink-0"/>}
+                  {expandedGroup===key?<ChevronUp size={13} className="text-gray-400 flex-shrink-0"/>:<ChevronDown size={13} className="text-gray-400 flex-shrink-0"/>}
                 </div>
-                {expandedGroup===g.key && (
+                {expandedGroup===key && (
                   <div className="border-t border-gray-100 p-4 bg-gray-50/50">
                     <table className="w-full text-xs" dir="rtl">
                       <thead><tr className="text-gray-500">
@@ -12947,26 +12937,29 @@ function ProcGrouped({}: PageProps) {
                         <th className="text-center py-1">{t("سعر الوحدة","Unit Price")}</th>
                       </tr></thead>
                       <tbody className="divide-y divide-gray-100">
-                        {g.items.map((it:any,j:number)=>{
-                          const pct = Math.round(it.totalQty/it.maxCapacity*100);
-                          const over = it.totalQty>it.maxCapacity;
+                        {(g.items ?? []).map((it:any,j:number)=>{
+                          const noCap = it.capacity==null;
+                          const pct = it.capacityPct ?? (noCap?null:Math.round((it.totalQuantity/it.capacity)*100));
+                          const over = it.exceeded===true;
                           return (
                             <tr key={j} className={over?"bg-red-50/40":""}>
                               <td className="py-2 font-medium text-gray-800">{it.name}</td>
-                              <td className="py-2 text-center text-gray-500">{it.unit}</td>
-                              <td className="py-2 text-center font-mono font-bold text-gray-800">{it.totalQty}</td>
-                              <td className="py-2 text-center font-mono text-amber-700">{it.maxCapacity}</td>
+                              <td className="py-2 text-center text-gray-500">{it.unit ?? "—"}</td>
+                              <td className="py-2 text-center font-mono font-bold text-gray-800">{it.totalQuantity}</td>
+                              <td className="py-2 text-center font-mono text-amber-700">{noCap?"—":it.capacity}</td>
                               <td className="py-2 text-center">
+                                {noCap ? <span className="text-gray-300 text-[10px]">{t("غير معلن","n/a")}</span> : (
                                 <div className="w-20 mx-auto">
                                   <div className="w-full bg-gray-100 rounded-full h-1.5 mb-0.5">
-                                    <div className={`h-1.5 rounded-full ${over?"bg-red-500":pct>80?"bg-amber-500":"bg-emerald-500"}`} style={{width:`${Math.min(pct,100)}%`}}/>
+                                    <div className={`h-1.5 rounded-full ${over?"bg-red-500":(pct??0)>80?"bg-amber-500":"bg-emerald-500"}`} style={{width:`${Math.min(pct??0,100)}%`}}/>
                                   </div>
-                                  <p className={`text-[9px] font-bold ${over?"text-red-600":pct>80?"text-amber-600":"text-emerald-600"}`}>
-                                    {over?`${t("تجاوز بـ","Exceeds by")} ${it.totalQty-it.maxCapacity} ${it.unit}`:`${pct}%`}
+                                  <p className={`text-[9px] font-bold ${over?"text-red-600":(pct??0)>80?"text-amber-600":"text-emerald-600"}`}>
+                                    {over?`${t("تجاوز بـ","Exceeds by")} ${it.excessQuantity ?? ""} ${it.unit ?? ""}`:`${pct}%`}
                                   </p>
                                 </div>
+                                )}
                               </td>
-                              <td className="py-2 text-center font-mono text-blue-700">{it.price} {t("ر.س","SAR")}</td>
+                              <td className="py-2 text-center font-mono text-blue-700">{fmtAmt(it.unitPrice ?? 0)} {t("ر.س","SAR")}</td>
                             </tr>
                           );
                         })}
@@ -12985,9 +12978,37 @@ function ProcGrouped({}: PageProps) {
               </div>
             );
           })}
+
+          {/* Unassigned officer orders — assign a supplier then send */}
+          {unassigned.length>0 && (
+            <div className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden">
+              <div className="px-5 py-3 bg-amber-50/70 border-b border-amber-100 flex items-center gap-2">
+                <AlertTriangle size={13} className="text-amber-600"/>
+                <p className="font-bold text-amber-800 text-sm">{t("طلبات بلا مورد — تحتاج تعيين","Unassigned orders — need a supplier")}</p>
+                <Badge className="bg-amber-100 text-amber-700 text-[10px]">{unassigned.length}</Badge>
+              </div>
+              {unassigned.map((o:any)=>(
+                <div key={o.id} className="px-5 py-3 flex items-center gap-3 border-b border-gray-50 last:border-0">
+                  <div className="flex-1">
+                    <span className="font-mono text-xs text-purple-600">{o.orderNumber}</span>
+                    <span className="text-xs text-gray-500 mr-2">{o.branchName ?? "—"}</span>
+                  </div>
+                  <span className="font-mono font-bold text-gray-700 text-sm">{fmtAmt(o.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
+                  <select value={assignSupplier[o.id] ?? ""} onChange={e=>setAssignSupplier(m=>({...m,[o.id]:e.target.value}))}
+                    className="text-xs border border-gray-200 rounded-lg px-2 py-1.5">
+                    <option value="">{t("اختر المورد","Select supplier")}</option>
+                    {supplierOpts.map((s:any)=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                  <Btn size="sm" variant="primary" disabled={!assignSupplier[o.id]||sendMut.isPending}
+                    onClick={()=>sendMut.mutate({ supplierId: assignSupplier[o.id], orderIds:[o.id] })}><Truck size={11}/> {t("إرسال","Send")}</Btn>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4">
+          {cityGroups.length===0 && <div className="col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-10 text-center text-sm text-gray-400">{t("لا توجد طلبات جاهزة للتجميع","No orders ready to consolidate")}</div>}
           {cityGroups.map((cg,i)=>(
             <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
               <div className="flex items-center gap-3 mb-3">
@@ -12997,20 +13018,21 @@ function ProcGrouped({}: PageProps) {
                     <p className="font-bold text-gray-800">{cg.city}</p>
                     {cg.urgentCount>0 && <Badge className="bg-red-50 text-red-700 text-[10px]">{cg.urgentCount} {t("عاجل","Urgent")}</Badge>}
                   </div>
-                  <p className="text-xs text-gray-400">{cg.ordersCount} {t("طلب","orders")} · {cg.suppliers.length} {t("موردون","suppliers")}</p>
+                  <p className="text-xs text-gray-400">{cg.ordersCount} {t("طلب","orders")} · {(cg.suppliers ?? []).length} {t("موردون","suppliers")}</p>
                 </div>
-                <span className="font-mono font-bold text-purple-700">{fmtAmt(cg.total)} {t("ر.س","SAR")}</span>
+                <span className="font-mono font-bold text-purple-700">{fmtAmt(cg.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
               </div>
               <div className="space-y-1 text-xs text-gray-600">
-                {cg.suppliers.map((s:any,j:number)=>(
+                {(cg.suppliers ?? []).map((s:any,j:number)=>(
                   <div key={j} className="flex items-center gap-1.5 py-1 border-b border-gray-50 last:border-0">
                     <Truck size={10} className="text-gray-400"/>
                     <span>{s}</span>
                   </div>
                 ))}
               </div>
-              <button className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100 font-semibold transition-colors">
-                <Eye size={11}/> {t("عرض طلبات","View orders for")} {cg.city}
+              <button onClick={()=>{ setViewMode("supplier"); setExpandedGroup(null); }}
+                className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg bg-purple-50 text-purple-600 hover:bg-purple-100 font-semibold transition-colors">
+                <Eye size={11}/> {t("عرض بالموردين","View by suppliers")}
               </button>
             </div>
           ))}
@@ -13022,27 +13044,89 @@ function ProcGrouped({}: PageProps) {
 
 function ProcSent({}: PageProps) {
   const { t } = useLang();
-  const { data: apiSent = [] } = useProcurementOrdersPlatform({ status: "sent" });
-  // Sent orders come from the platform API; empty until the backend returns them.
-  const orders = ((apiSent as any[]).length > 0 ? (apiSent as any) : []) as any[];
+  // Sent groups come from the bridge; status is derived live from member orders.
+  const { data: apiSent } = useSentPurchaseOrders();
+  const groups = ((apiSent as any[]) ?? []) as any[];
+  const [trackId, setTrackId] = useState<string|null>(null);
+  const { data: trackDetail } = usePurchaseOrderGroup(trackId ?? undefined);
   const statusCfg: Record<string,{cls:string;label:string}> = {
     confirmed:{cls:"bg-emerald-50 text-emerald-700",label:t("مؤكد","Confirmed")},
     preparing:{cls:"bg-amber-50 text-amber-700",label:t("قيد التحضير","Preparing")},
-    onway:{cls:"bg-blue-50 text-blue-700",label:t("في الطريق","On the Way")},
+    on_the_way:{cls:"bg-blue-50 text-blue-700",label:t("في الطريق","On the Way")},
+    delivered:{cls:"bg-emerald-50 text-emerald-700",label:t("تم التسليم","Delivered")},
   };
+  const stCfg = (s:string) => statusCfg[s] ?? { cls:"bg-gray-50 text-gray-600", label:s ?? "—" };
+  const det = trackDetail as any;
   return (
     <div className="space-y-5">
       <h2 className="text-xl font-bold text-gray-800">{t("المرسلة للموردين","Sent to Suppliers")}</h2>
       <Card title={t("الطلبات المرسلة","Sent Orders")}>
-        {orders.map((o,i)=>(
-          <div key={i} className="px-5 py-4 flex items-center gap-4 border-b border-gray-100 last:border-0 hover:bg-gray-50">
-            <div className="flex-1"><p className="font-semibold text-sm text-gray-800">{o.supplier}</p><p className="text-xs text-gray-400 mt-1">{t("أُرسل","Sent")} {o.sent}</p></div>
-            <Badge className={statusCfg[o.status].cls}>{statusCfg[o.status].label}</Badge>
-            <span className="font-mono font-bold text-gray-800">{fmtAmt(o.total)} {t("ر.س","SAR")}</span>
-            <Btn size="sm"><Eye size={12}/> {t("تتبع","Track")}</Btn>
+        {groups.length===0 && <div className="px-5 py-8 text-center text-sm text-gray-400">{t("لا توجد طلبات مرسلة","No sent orders")}</div>}
+        {groups.map((o)=>{ const c=stCfg(o.status); return (
+          <div key={o.groupId} className="px-5 py-4 flex items-center gap-4 border-b border-gray-100 last:border-0 hover:bg-gray-50">
+            <div className="flex-1"><p className="font-semibold text-sm text-gray-800">{o.supplierName ?? "—"}</p><p className="text-xs text-gray-400 mt-1"><span className="font-mono text-purple-600">{o.groupNumber}</span> · {o.ordersCount ?? 0} {t("طلب","orders")} · {t("أُرسل","Sent")} {String(o.sentAt ?? "").slice(0,10)}</p></div>
+            <Badge className={c.cls}>{c.label}</Badge>
+            <span className="font-mono font-bold text-gray-800">{fmtAmt(o.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
+            <Btn size="sm" onClick={()=>setTrackId(o.groupId)}><Eye size={12}/> {t("تتبع","Track")}</Btn>
           </div>
-        ))}
+        );})}
       </Card>
+
+      {trackId && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setTrackId(null)} dir="rtl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="font-bold text-gray-800">{t("تتبع الدفعة","Track Group")} <span className="font-mono text-purple-600 text-sm">{det?.groupNumber ?? ""}</span></h3>
+              <button onClick={()=>setTrackId(null)} className="text-gray-400"><XCircle size={18}/></button>
+            </div>
+            {!det ? <p className="text-sm text-gray-400 py-6 text-center">{t("جاري التحميل...","Loading...")}</p> : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="font-semibold text-gray-700">{det.supplierName ?? "—"}</span>
+                  <Badge className={stCfg(det.status).cls}>{stCfg(det.status).label}</Badge>
+                  <span className="font-mono font-bold text-gray-800 mr-auto">{fmtAmt(det.totalAmount ?? 0)} {t("ر.س","SAR")}</span>
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-gray-600 mb-1.5">{t("الطلبات","Orders")} ({(det.orders ?? []).length})</p>
+                  <div className="border border-gray-100 rounded-xl overflow-hidden divide-y divide-gray-50">
+                    {(det.orders ?? []).map((r:any)=>(
+                      <div key={r.id} className="px-3 py-2 flex items-center gap-2 text-xs">
+                        <span className="font-mono text-purple-600">{r.orderNumber}</span>
+                        <span className="text-gray-600">{r.branchName ?? r.branchId ?? "—"}{r.city?` · ${r.city}`:""}</span>
+                        <Badge className={stCfg(r.status).cls + " mr-auto"}>{r.statusLabel ?? stCfg(r.status).label}</Badge>
+                        <span className="font-mono font-semibold text-gray-700">{fmtAmt(r.totalAmount ?? 0)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                {(det.items ?? []).length>0 && (
+                <div>
+                  <p className="text-xs font-bold text-gray-600 mb-1.5">{t("الأصناف المجمعة","Aggregated Items")}</p>
+                  <table className="w-full text-xs border border-gray-100 rounded-xl overflow-hidden" dir="rtl">
+                    <thead className="bg-gray-50 text-gray-500"><tr>
+                      <th className="text-right px-3 py-1.5">{t("الصنف","Item")}</th>
+                      <th className="text-center px-3 py-1.5">{t("الوحدة","Unit")}</th>
+                      <th className="text-center px-3 py-1.5">{t("الكمية","Qty")}</th>
+                      <th className="text-center px-3 py-1.5">{t("سعر الوحدة","Unit Price")}</th>
+                    </tr></thead>
+                    <tbody className="divide-y divide-gray-50 bg-white">
+                      {(det.items ?? []).map((it:any,j:number)=>(
+                        <tr key={j}>
+                          <td className="px-3 py-1.5 font-medium text-gray-800">{it.name}</td>
+                          <td className="px-3 py-1.5 text-center text-gray-500">{it.unit ?? "—"}</td>
+                          <td className="px-3 py-1.5 text-center font-mono">{it.totalQuantity}</td>
+                          <td className="px-3 py-1.5 text-center font-mono text-blue-700">{fmtAmt(it.unitPrice ?? 0)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -13252,11 +13336,22 @@ function BranchSettings({ navigate }:PageProps) {
 function ProcItems({}: PageProps) {
   const { data: apiItems } = useProcurementItemsPlatform();
   const { t } = useLang();
+  const { data: catLookup } = useLookup("supplier-categories");
   const exportItemsMut = useExportProcurementItems();
   const createItemMut = useCreateProcurementItem();
+  const updateItemMut = useUpdateProcurementItem();
+  const deleteItemMut = useDeleteProcurementItem();
   const [search, setSearch] = useState("");
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name:"", unit:"", category:"", price:"" });
+  const [editId, setEditId] = useState<string|null>(null);
+  const [editForm, setEditForm] = useState({ name:"", unit:"", category:"", price:"" });
+  const [historyId, setHistoryId] = useState<string|null>(null);
+  const { data: priceHistory } = useItemPriceHistory(historyId ?? undefined);
+  const categories = ((catLookup as any[]) ?? []);
+  const catLabel = (c:any) => c.labelAr ?? c.label ?? c.name ?? c.value ?? c.key ?? "";
+  const catValue = (c:any) => c.value ?? c.key ?? c.id ?? catLabel(c);
+  const priceOf = (item:any) => { const h = item.lastPriceHalalas ?? item.priceHalalas; return h!=null ? h/100 : (item.defaultPrice ?? null); };
   const submitItem = () => {
     if (!form.name.trim()) return;
     createItemMut.mutate(
@@ -13264,15 +13359,23 @@ function ProcItems({}: PageProps) {
       { onSuccess: () => { setShowAdd(false); setForm({ name:"", unit:"", category:"", price:"" }); } },
     );
   };
+  const openEdit = (item:any) => { setEditId(item.id); setEditForm({ name:item.name ?? "", unit:item.unit ?? "", category:item.category ?? "", price: priceOf(item)!=null ? String(priceOf(item)) : "" }); };
+  const submitEdit = () => {
+    if (!editId || !editForm.name.trim()) return;
+    updateItemMut.mutate(
+      { id: editId, name: editForm.name, unit: editForm.unit, category: editForm.category, lastPriceHalalas: Math.round((parseFloat(editForm.price) || 0) * 100) } as any,
+      { onSuccess: () => setEditId(null) },
+    );
+  };
   // Procurement items come from the platform API; empty until the backend returns them.
+  // ⚠️ Backend gap: list is legacy-thin ({id,name}); monthly-usage/stock/last-order have no source.
   const items = ((apiItems as any)?.length > 0 ? (apiItems as any) : []) as any[];
-  const filtered = items.filter(i=>!search||i.name.includes(search)||i.category.includes(search)||i.supplier.includes(search));
-  const totalMonthly = filtered.reduce((s,i)=>s+i.avgPrice*i.monthlyUsage,0);
+  const filtered = items.filter(i=>!search||(i.name??"").includes(search)||(i.category??"").includes(search));
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-800">{t("كتالوج الأصناف","Item Catalog")}</h2><p className="text-gray-400 text-sm mt-0.5">{filtered.length} {t("صنف","items")} · {t("تكلفة شهرية إجمالية:","Total monthly cost:")} {fmtAmt(totalMonthly)} {t("ر.س","SAR")}</p></div>
+        <div><h2 className="text-xl font-bold text-gray-800">{t("كتالوج الأصناف","Item Catalog")}</h2><p className="text-gray-400 text-sm mt-0.5">{filtered.length} {t("صنف","items")}</p></div>
         <div className="flex gap-2">
           <button onClick={()=>exportItemsMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> Excel</button>
           <Btn variant="primary" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة صنف","Add Item")}</Btn>
@@ -13281,7 +13384,7 @@ function ProcItems({}: PageProps) {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3">
         <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
           <Search size={13} className="text-gray-400 flex-shrink-0"/>
-          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={t("بحث بالصنف أو التصنيف أو المورد...","Search by item, category or supplier...")} className="flex-1 text-sm outline-none"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder={t("بحث بالصنف أو التصنيف...","Search by item or category...")} className="flex-1 text-sm outline-none"/>
         </div>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -13290,51 +13393,72 @@ function ProcItems({}: PageProps) {
             <tr className="text-xs text-gray-500">
               <th className="px-4 py-3 text-right">{t("الصنف","Item")}</th>
               <th className="px-4 py-3 text-center">{t("التصنيف","Category")}</th>
-              <th className="px-4 py-3 text-center">{t("المورد","Supplier")}</th>
               <th className="px-4 py-3 text-center">{t("الوحدة","Unit")}</th>
-              <th className="px-4 py-3 text-center">{t("متوسط السعر","Avg Price")}</th>
-              <th className="px-4 py-3 text-center">{t("الاستهلاك الشهري","Monthly Usage")}</th>
-              <th className="px-4 py-3 text-center">{t("المخزون الحالي","Current Stock")}</th>
-              <th className="px-4 py-3 text-center">{t("آخر طلب","Last Order")}</th>
+              <th className="px-4 py-3 text-center">{t("آخر سعر","Last Price")}</th>
+              <th className="px-4 py-3 text-center">{t("إجراءات","Actions")}</th>
             </tr>
           </thead>
           <tbody>
-            {filtered.map((item,i)=>(
-              <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60 last:border-0">
+            {filtered.length===0 && <tr><td colSpan={5} className="px-4 py-8 text-center text-gray-400">{t("لا توجد أصناف","No items")}</td></tr>}
+            {filtered.map((item,i)=>{ const p = priceOf(item); return (
+              <tr key={item.id ?? i} className="border-b border-gray-50 hover:bg-gray-50/60 last:border-0">
                 <td className="px-4 py-3 font-semibold text-gray-800">{item.name}</td>
-                <td className="px-4 py-3 text-center"><Badge className="bg-purple-50 text-purple-700 text-[10px]">{item.category}</Badge></td>
-                <td className="px-4 py-3 text-center text-gray-500 text-xs">{item.supplier}</td>
-                <td className="px-4 py-3 text-center text-gray-600">{item.unit}</td>
-                <td className="px-4 py-3 text-center font-mono font-bold text-gray-800">{item.avgPrice} {t("ر.س","SAR")}</td>
-                <td className="px-4 py-3 text-center font-mono">{item.monthlyUsage} {item.unit}</td>
-                <td className="px-4 py-3 text-center">
-                  <span className={`font-bold font-mono ${item.stock<15?"text-red-600":item.stock<25?"text-amber-600":"text-emerald-600"}`}>{item.stock}</span>
+                <td className="px-4 py-3 text-center">{item.category ? <Badge className="bg-purple-50 text-purple-700 text-[10px]">{item.category}</Badge> : <span className="text-gray-300">—</span>}</td>
+                <td className="px-4 py-3 text-center text-gray-600">{item.unit ?? "—"}</td>
+                <td className="px-4 py-3 text-center font-mono font-bold text-gray-800">{p!=null ? `${fmtAmt(p)} ${t("ر.س","SAR")}` : "—"}</td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center justify-center gap-1.5">
+                    <button onClick={()=>setHistoryId(item.id)} title={t("تاريخ الأسعار","Price history")} className="text-blue-600 hover:text-blue-800"><TrendingUp size={14}/></button>
+                    <button onClick={()=>openEdit(item)} title={t("تعديل","Edit")} className="text-gray-500 hover:text-gray-800"><Edit2 size={14}/></button>
+                    <button onClick={()=>{ if(window.confirm(t("حذف الصنف؟","Delete item?"))) deleteItemMut.mutate(item.id); }} title={t("حذف","Delete")} className="text-red-500 hover:text-red-700"><Trash2 size={14}/></button>
+                  </div>
                 </td>
-                <td className="px-4 py-3 text-center text-gray-400 text-xs">{item.lastOrder}</td>
               </tr>
-            ))}
+            );})}
           </tbody>
-          <tfoot className="bg-gray-50/80 border-t border-gray-200">
-            <tr>
-              <td className="px-4 py-2.5 font-bold text-gray-700 text-xs" colSpan={4}>{t("الإجمالي الشهري","Monthly Total")}</td>
-              <td colSpan={4} className="px-4 py-2.5 text-left font-mono font-black text-purple-700">{fmtAmt(totalMonthly)} {t("ر.س","SAR")}</td>
-            </tr>
-          </tfoot>
         </table>
       </div>
-      {showAdd && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setShowAdd(false)} dir="rtl">
+
+      {(showAdd || editId) && (()=>{ const isEdit=!!editId; const f=isEdit?editForm:form; const setF=isEdit?setEditForm:setForm; const close=()=>isEdit?setEditId(null):setShowAdd(false); const busy=isEdit?updateItemMut.isPending:createItemMut.isPending; return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={close} dir="rtl">
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{t("إضافة صنف","Add Item")}</h3><button onClick={()=>setShowAdd(false)} className="text-gray-400"><XCircle size={18}/></button></div>
+            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{isEdit?t("تعديل صنف","Edit Item"):t("إضافة صنف","Add Item")}</h3><button onClick={close} className="text-gray-400"><XCircle size={18}/></button></div>
             <div className="space-y-3">
-              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم الصنف","Item Name")}</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم الصنف","Item Name")}</label><input value={f.name} onChange={e=>setF(v=>({...v,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الوحدة","Unit")}</label><input value={form.unit} onChange={e=>setForm(f=>({...f,unit:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("آخر سعر (ر.س)","Last Price (SAR)")}</label><input type="number" value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الوحدة","Unit")}</label><input value={f.unit} onChange={e=>setF(v=>({...v,unit:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("آخر سعر (ر.س)","Last Price (SAR)")}</label><input type="number" value={f.price} onChange={e=>setF(v=>({...v,price:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
               </div>
-              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التصنيف","Category")}</label><input value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={()=>setShowAdd(false)}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={submitItem} disabled={!form.name.trim()||createItemMut.isPending}><Plus size={12}/> {t("إضافة","Add")}</Btn></div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التصنيف","Category")}</label>
+                {categories.length>0 ? (
+                  <select value={f.category} onChange={e=>setF(v=>({...v,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 bg-white">
+                    <option value="">{t("— اختر —","— Select —")}</option>
+                    {categories.map((c:any,ci:number)=><option key={ci} value={catValue(c)}>{catLabel(c)}</option>)}
+                  </select>
+                ) : (
+                  <input value={f.category} onChange={e=>setF(v=>({...v,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/>
+                )}
+              </div>
+              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={close}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={isEdit?submitEdit:submitItem} disabled={!f.name.trim()||busy}><Plus size={12}/> {isEdit?t("حفظ","Save"):t("إضافة","Add")}</Btn></div>
             </div>
+          </div>
+        </div>
+      ); })()}
+
+      {historyId && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setHistoryId(null)} dir="rtl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800">{t("تاريخ الأسعار","Price History")}</h3><button onClick={()=>setHistoryId(null)} className="text-gray-400"><XCircle size={18}/></button></div>
+            {(((priceHistory as any[]) ?? []).length===0) ? <p className="text-sm text-gray-400 py-6 text-center">{t("لا يوجد تاريخ أسعار","No price history")}</p> : (
+              <table className="w-full text-xs" dir="rtl">
+                <thead className="text-gray-500"><tr><th className="text-right py-1.5">{t("المورد","Supplier")}</th><th className="text-center py-1.5">{t("السعر","Price")}</th><th className="text-center py-1.5">{t("التاريخ","Date")}</th></tr></thead>
+                <tbody className="divide-y divide-gray-50">
+                  {((priceHistory as any[]) ?? []).map((r:any,ri:number)=>(
+                    <tr key={ri}><td className="py-1.5 font-medium text-gray-700">{r.supplierName ?? r.supplierId ?? "—"}</td><td className="py-1.5 text-center font-mono">{r.priceHalalas!=null?`${fmtAmt(r.priceHalalas/100)} ${t("ر.س","SAR")}`:"—"}</td><td className="py-1.5 text-center text-gray-400">{String(r.recordedAt ?? "").slice(0,10)}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       )}
@@ -13345,168 +13469,159 @@ function ProcItems({}: PageProps) {
 function ProcSuppliers({}: PageProps) {
   const { data: apiSuppliers } = useProcurementSuppliersPlatform();
   const { t } = useLang();
+  const { data: catLookup } = useLookup("supplier-categories");
   const exportSuppliersMut = useExportSuppliers();
   const createSupplierMut = useCreateSupplier();
-  const [expandedSup, setExpandedSup] = useState<string|null>(null);
-  const [activeTab, setActiveTab] = useState<"deliveries"|"prices">("deliveries");
+  const updateSupplierMut = useUpdateSupplier();
+  const rateMut = useRateSupplier();
+  const toggleMut = useToggleSupplierActive();
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState({ name:"", category:"", contactName:"", phone:"", email:"" });
+  const [editId, setEditId] = useState<string|null>(null);
+  const [editForm, setEditForm] = useState({ name:"", category:"", contactName:"", phone:"", email:"" });
+  const [rateFor, setRateFor] = useState<{id:string;name:string}|null>(null);
+  const [rateValue, setRateValue] = useState(5);
+  const [rateComment, setRateComment] = useState("");
+  const categories = ((catLookup as any[]) ?? []);
+  const catLabel = (c:any) => c.labelAr ?? c.label ?? c.name ?? c.value ?? c.key ?? "";
+  const catValue = (c:any) => c.value ?? c.key ?? c.id ?? catLabel(c);
+  const starsOf = (sup:any) => { const a = sup.ratingAvg; return a!=null ? a/10 : (sup.rating ?? 0); };
+  const isActiveOf = (sup:any) => sup.isActive ?? (sup.status==="نشط" || sup.status==="active" || sup.status===undefined);
+  const contactOf = (sup:any) => sup.contactName ?? sup.contact ?? sup.contactPhone ?? "";
+
   const submitSupplier = () => {
     if (!form.name.trim()) return;
     createSupplierMut.mutate(
-      { name: form.name, category: form.category, contactName: form.contactName, phone: form.phone, email: form.email || undefined } as any,
+      { name: form.name, category: form.category, contactName: form.contactName, contactPhone: form.phone, contactEmail: form.email || undefined } as any,
       { onSuccess: () => { setShowAdd(false); setForm({ name:"", category:"", contactName:"", phone:"", email:"" }); } },
     );
   };
+  const openEdit = (sup:any) => { setEditId(sup.id); setEditForm({ name:sup.name ?? "", category:sup.category ?? "", contactName:contactOf(sup), phone:sup.contactPhone ?? "", email:sup.contactEmail ?? "" }); };
+  const submitEdit = () => {
+    if (!editId || !editForm.name.trim()) return;
+    updateSupplierMut.mutate(
+      { id: editId, name: editForm.name, category: editForm.category, contactName: editForm.contactName, contactPhone: editForm.phone, contactEmail: editForm.email || undefined } as any,
+      { onSuccess: () => setEditId(null) },
+    );
+  };
+  const submitRate = () => {
+    if (!rateFor) return;
+    rateMut.mutate({ id: rateFor.id, rating: rateValue, comment: rateComment || undefined } as any,
+      { onSuccess: () => { setRateFor(null); setRateComment(""); setRateValue(5); } });
+  };
 
-  // Suppliers (with deliveries + price history) come from the platform API; empty until returned.
+  // Suppliers come from the platform API; empty until returned.
+  // ⚠️ Backend gap: list is legacy-thin ({id,name,category}); compliance%/monthly/delivery-history unbacked.
   const suppliers = ((apiSuppliers as any)?.length > 0 ? (apiSuppliers as any) : []) as any[];
-  const totalMonthly = suppliers.reduce((s,sup)=>s+sup.monthlyTotal,0);
 
   return (
     <div className="space-y-5">
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-800">{t("الموردون","Suppliers")}</h2><p className="text-gray-400 text-sm mt-0.5">{suppliers.length} {t("مورد","suppliers")} · {t("إجمالي شهري:","Monthly total:")} {fmtAmt(totalMonthly)} {t("ر.س","SAR")}</p></div>
+        <div><h2 className="text-xl font-bold text-gray-800">{t("الموردون","Suppliers")}</h2><p className="text-gray-400 text-sm mt-0.5">{suppliers.length} {t("مورد","suppliers")}</p></div>
         <div className="flex gap-2">
           <button onClick={()=>exportSuppliersMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> Excel</button>
           <Btn variant="primary" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة مورد","Add Supplier")}</Btn>
         </div>
       </div>
+      {suppliers.length===0 && <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-10 text-center text-sm text-gray-400">{t("لا يوجد موردون","No suppliers")}</div>}
       <div className="grid grid-cols-2 gap-4">
         {suppliers.map((sup,i)=>{
-          const isExpanded = expandedSup===sup.name;
-          const avgDeliveryRating = sup.deliveries.reduce((s:number,d:any)=>s+d.rating,0)/sup.deliveries.length;
+          const active = isActiveOf(sup);
+          const stars = starsOf(sup);
           return (
-          <div key={i} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+          <div key={sup.id ?? i} className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="p-4">
               <div className="flex items-start gap-3 mb-3">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">{sup.name[0]}</div>
-                <div className="flex-1">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">{(sup.name ?? "?")[0]}</div>
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <p className="font-bold text-gray-800 text-sm">{sup.name}</p>
-                    <Badge className={sup.status==="نشط"?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700"}>{sup.status==="نشط"?t("نشط","Active"):t("موقوف مؤقتاً","Temporarily Suspended")}</Badge>
+                    <p className="font-bold text-gray-800 text-sm truncate">{sup.name}</p>
+                    <Badge className={active?"bg-emerald-50 text-emerald-700":"bg-amber-50 text-amber-700"}>{active?t("نشط","Active"):t("موقوف","Suspended")}</Badge>
                   </div>
-                  <p className="text-xs text-gray-400">{sup.category} · {sup.contact}</p>
+                  <p className="text-xs text-gray-400 truncate">{sup.category ?? "—"}{contactOf(sup)?` · ${contactOf(sup)}`:""}</p>
                 </div>
                 <div className="flex items-center gap-0.5">
-                  {[1,2,3,4,5].map(s=><Star key={s} size={10} fill={s<=Math.round(sup.rating)?"#F59E0B":"none"} className={s<=Math.round(sup.rating)?"text-amber-400":"text-gray-200"}/>)}
-                  <span className="text-[10px] text-gray-500 mr-1">{sup.rating}</span>
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-2 text-center mb-3">
-                <div className="bg-gray-50 rounded-lg p-2">
-                  <p className="text-[9px] text-gray-400">{t("الطلبات","Orders")}</p>
-                  <p className="font-bold text-gray-800">{sup.orders}</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2">
-                  <p className="text-[9px] text-gray-400">{t("الشهري","Monthly")}</p>
-                  <p className="font-bold text-purple-700 font-mono text-xs">{(sup.monthlyTotal/1000).toFixed(0)}K</p>
-                </div>
-                <div className="bg-gray-50 rounded-lg p-2">
-                  <p className="text-[9px] text-gray-400">{t("الالتزام","On-time")}</p>
-                  <p className={`font-bold ${sup.onTime>=90?"text-emerald-600":sup.onTime>=80?"text-amber-600":"text-red-600"}`}>{sup.onTime}%</p>
+                  {[1,2,3,4,5].map(s=><Star key={s} size={10} fill={s<=Math.round(stars)?"#F59E0B":"none"} className={s<=Math.round(stars)?"text-amber-400":"text-gray-200"}/>)}
+                  <span className="text-[10px] text-gray-500 mr-1">{stars.toFixed(1)}</span>
                 </div>
               </div>
               <div className="mt-2.5 flex gap-2">
-                <Btn size="sm" variant="primary" className="flex-1"><ShoppingCart size={11}/> {t("طلب جديد","New Order")}</Btn>
-                <button onClick={()=>setExpandedSup(isExpanded?null:sup.name)}
-                  className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold transition-all ${isExpanded?"bg-purple-600 text-white border-purple-600":"bg-white text-purple-600 border-purple-200 hover:bg-purple-50"}`}>
-                  <Eye size={11}/> {isExpanded?t("إخفاء","Collapse"):t("التسليمات والأسعار","Deliveries & Prices")}
-                </button>
+                <Btn size="sm" variant="ghost" className="flex-1" onClick={()=>{ setRateFor({id:sup.id,name:sup.name}); setRateValue(Math.round(stars)||5); }}><Star size={11}/> {t("تقييم","Rate")}</Btn>
+                <Btn size="sm" variant="ghost" className="flex-1" onClick={()=>openEdit(sup)}><Edit2 size={11}/> {t("تعديل","Edit")}</Btn>
+                <Btn size="sm" className="flex-1" disabled={toggleMut.isPending} onClick={()=>toggleMut.mutate(sup.id)}>{active?t("إخفاء","Suspend"):t("تفعيل","Activate")}</Btn>
               </div>
             </div>
-            {isExpanded && (
-              <div className="border-t border-gray-100">
-                <div className="flex gap-0 border-b border-gray-100">
-                  {(["deliveries","prices"] as const).map(tb=>(
-                    <button key={tb} onClick={()=>setActiveTab(tb)}
-                      className={`flex-1 py-2.5 text-xs font-semibold transition-colors ${activeTab===tb?"bg-purple-50 text-purple-700 border-b-2 border-purple-600":"text-gray-500 hover:text-gray-700"}`}>
-                      {tb==="deliveries"?`📦 ${t("سجل التسليمات","Delivery Log")}`:`💰 ${t("مقارنة الأسعار","Price Comparison")}`}
-                    </button>
-                  ))}
-                </div>
-                {activeTab==="deliveries" ? (
-                  <div className="p-3 space-y-2">
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-[11px] font-bold text-gray-600">{t("آخر","Last")} {sup.deliveries.length} {t("تسليمات","deliveries")}</p>
-                      <span className="text-[10px] text-gray-400">{t("متوسط التقييم:","Avg rating:")} {avgDeliveryRating.toFixed(1)}/5</span>
-                    </div>
-                    {sup.deliveries.map((d:any,j:number)=>(
-                      <div key={j} className={`flex items-start gap-2 p-2 rounded-lg border ${d.status.includes("تأخر")?"border-red-100 bg-red-50/40":"border-gray-100 bg-gray-50/60"}`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium text-gray-700">{d.items}</p>
-                          <p className="text-[10px] text-gray-400">{d.date}</p>
-                          {d.note && <p className="text-[10px] text-amber-600 mt-0.5">{d.note}</p>}
-                        </div>
-                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                          <Badge className={d.status.includes("تأخر")?"bg-red-50 text-red-700 border border-red-100 text-[9px]":"bg-emerald-50 text-emerald-700 border border-emerald-100 text-[9px]"}>{d.status}</Badge>
-                          <div className="flex items-center gap-0.5">
-                            {[1,2,3,4,5].map(s=><Star key={s} size={8} fill={s<=d.rating?"#F59E0B":"none"} className={s<=d.rating?"text-amber-400":"text-gray-200"}/>)}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-3">
-                    <p className="text-[11px] font-bold text-gray-600 mb-3">{t("تاريخ الأسعار — آخر 3 أشهر","Price History — Last 3 Months")}</p>
-                    <table className="w-full text-xs" dir="rtl">
-                      <thead><tr className="text-gray-400 text-[10px]">
-                        <th className="text-right pb-1.5">{t("الصنف","Item")}</th>
-                        <th className="text-center pb-1.5">{t("أغسطس","Aug")}</th>
-                        <th className="text-center pb-1.5">{t("سبتمبر","Sep")}</th>
-                        <th className="text-center pb-1.5">{t("أكتوبر","Oct")}</th>
-                        <th className="text-center pb-1.5">{t("التغيير","Change")}</th>
-                      </tr></thead>
-                      <tbody className="divide-y divide-gray-100">
-                        {sup.priceHistory.map((ph:any,k:number)=>{
-                          const first=ph.prices[0].price; const last=ph.prices[ph.prices.length-1].price;
-                          const change=last-first;
-                          return (
-                            <tr key={k}>
-                              <td className="py-1.5 font-medium text-gray-700">{ph.item} <span className="text-gray-400">/{ph.unit}</span></td>
-                              {ph.prices.map((p:any,m:number)=>(
-                                <td key={m} className="py-1.5 text-center font-mono">{p.price} {t("ر.س","SAR")}</td>
-                              ))}
-                              <td className="py-1.5 text-center">
-                                <span className={`font-bold text-[10px] ${change>0?"text-red-600":change<0?"text-emerald-600":"text-gray-400"}`}>
-                                  {change>0?`↑ +${change}`:change<0?`↓ ${change}`:"—"} {t("ر.س","SAR")}
-                                </span>
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
           );
         })}
       </div>
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-3 flex items-center justify-between">
-        <span className="text-sm font-semibold text-gray-700">{t("إجمالي الإنفاق الشهري على الموردين","Total Monthly Supplier Spend")}</span>
-        <span className="font-mono font-black text-xl text-purple-700">{fmtAmt(totalMonthly)} {t("ر.س","SAR")}</span>
-      </div>
-      {showAdd && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setShowAdd(false)} dir="rtl">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{t("إضافة مورد","Add Supplier")}</h3><button onClick={()=>setShowAdd(false)} className="text-gray-400"><XCircle size={18}/></button></div>
-            <div className="space-y-3">
-              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم المورد","Supplier Name")}</label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الفئة","Category")}</label><input value={form.category} onChange={e=>setForm(f=>({...f,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم جهة الاتصال","Contact Name")}</label><input value={form.contactName} onChange={e=>setForm(f=>({...f,contactName:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الجوال","Phone")}</label><input value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("البريد (اختياري)","Email (optional)")}</label><input value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
-              </div>
-              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={()=>setShowAdd(false)}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={submitSupplier} disabled={!form.name.trim()||createSupplierMut.isPending}><Plus size={12}/> {t("إضافة","Add")}</Btn></div>
+
+      {rateFor && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setRateFor(null)} dir="rtl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800">{t("تقييم","Rate")} {rateFor.name}</h3><button onClick={()=>setRateFor(null)} className="text-gray-400"><XCircle size={18}/></button></div>
+            <div className="flex items-center justify-center gap-1 mb-3">
+              {[1,2,3,4,5].map(s=><button key={s} onClick={()=>setRateValue(s)}><Star size={28} fill={s<=rateValue?"#F59E0B":"none"} className={s<=rateValue?"text-amber-400":"text-gray-200"}/></button>)}
             </div>
+            <textarea value={rateComment} onChange={e=>setRateComment(e.target.value)} placeholder={t("تعليق (اختياري)...","Comment (optional)...")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 h-20 resize-none"/>
+            <div className="flex gap-2 justify-end pt-3"><Btn size="sm" onClick={()=>setRateFor(null)}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={submitRate} disabled={rateMut.isPending}><Star size={12}/> {t("حفظ التقييم","Save Rating")}</Btn></div>
           </div>
         </div>
       )}
+
+      {(showAdd || editId) && (()=>{ const isEdit=!!editId; const f=isEdit?editForm:form; const setF=isEdit?setEditForm:setForm; const close=()=>isEdit?setEditId(null):setShowAdd(false); const busy=isEdit?updateSupplierMut.isPending:createSupplierMut.isPending; return (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={close} dir="rtl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{isEdit?t("تعديل مورد","Edit Supplier"):t("إضافة مورد","Add Supplier")}</h3><button onClick={close} className="text-gray-400"><XCircle size={18}/></button></div>
+            <div className="space-y-3">
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم المورد","Supplier Name")}</label><input value={f.name} onChange={e=>setF(v=>({...v,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الفئة","Category")}</label>
+                {categories.length>0 ? (
+                  <select value={f.category} onChange={e=>setF(v=>({...v,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 bg-white">
+                    <option value="">{t("— اختر —","— Select —")}</option>
+                    {categories.map((c:any,ci:number)=><option key={ci} value={catValue(c)}>{catLabel(c)}</option>)}
+                  </select>
+                ) : (
+                  <input value={f.category} onChange={e=>setF(v=>({...v,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/>
+                )}
+              </div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم جهة الاتصال","Contact Name")}</label><input value={f.contactName} onChange={e=>setF(v=>({...v,contactName:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الجوال","Phone")}</label><input value={f.phone} onChange={e=>setF(v=>({...v,phone:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("البريد (اختياري)","Email (optional)")}</label><input value={f.email} onChange={e=>setF(v=>({...v,email:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
+              </div>
+              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={close}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={isEdit?submitEdit:submitSupplier} disabled={!f.name.trim()||busy}><Plus size={12}/> {isEdit?t("حفظ","Save"):t("إضافة","Add")}</Btn></div>
+            </div>
+          </div>
+        </div>
+      ); })()}
+    </div>
+  );
+}
+
+// Procurement reports — catalog + download (backend deferred the content by product decision).
+function ProcReports({}: PageProps) {
+  const { t } = useLang();
+  const { data: apiReports } = useProcurementReports();
+  const dlMut = useDownloadProcurementReport();
+  const reports = ((apiReports as any[]) ?? []) as any[];
+  return (
+    <div className="space-y-5">
+      <h2 className="text-xl font-bold text-gray-800">{t("التقارير","Reports")}</h2>
+      {reports.length===0 && <div className="bg-white rounded-xl border border-gray-100 shadow-sm px-5 py-10 text-center text-sm text-gray-400">{t("لا توجد تقارير متاحة حالياً","No reports available yet")}</div>}
+      <div className="grid grid-cols-3 gap-4">
+        {reports.map((r:any,i:number)=>{ const key = r.key ?? r.reportKey ?? r.id; const label = r.labelAr ?? r.label ?? r.name ?? key; return (
+          <div key={i} className="bg-white rounded-xl border border-gray-100 p-5 shadow-sm">
+            <div className="text-3xl mb-3">📊</div>
+            <p className="font-semibold text-gray-800 text-sm">{label}</p>
+            {r.description && <p className="text-xs text-gray-400 mt-1">{r.description}</p>}
+            <div className="flex items-center gap-2 mt-3">
+              <Btn size="sm" disabled={dlMut.isPending||!key} onClick={()=>dlMut.mutate({ key, format:"pdf" })}><Download size={11}/> PDF</Btn>
+              <Btn size="sm" disabled={dlMut.isPending||!key} onClick={()=>dlMut.mutate({ key, format:"xlsx" })}><FileText size={11}/> Excel</Btn>
+            </div>
+          </div>
+        );})}
+      </div>
     </div>
   );
 }

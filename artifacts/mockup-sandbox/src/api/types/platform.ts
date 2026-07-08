@@ -561,6 +561,130 @@ export interface PlatformProcurementItem {
   defaultPrice?: number;
 }
 
+// ─── Procurement purchase-orders BRIDGE (real branch/mobile-app orders) ──────
+// ⚠️ Amounts here are SAR floats (NOT halalas) — do not divide by 100.
+export interface PurchaseOrder {
+  id: string;
+  orderNumber: string;
+  branchId: string;
+  branchName?: string | null; // null in approve/partial/reject responses — reuse from list row
+  orderType?: "direct_supplier" | "via_purchasing_officer" | "multiple_sources" | string;
+  status: string;
+  statusLabel?: string;
+  priority?: "high" | "normal" | null;
+  supplierId?: string | null;
+  totalAmount: number; // SAR float
+  totalItems?: number;
+  rejectionReason?: string | null;
+  submittedAt?: string;
+  decidedAt?: string | null;
+}
+
+export interface PurchaseOrderItem {
+  orderItemId: string;
+  itemId?: string | null;
+  name: string;
+  unit?: string;
+  quantityOrdered: number;
+  quantityConfirmed?: number | null;
+  unitPrice: number; // SAR float
+  totalPrice: number; // SAR float
+  status?: "pending" | "confirmed" | "rejected" | "partial" | string;
+  dailyConsumption?: number | null; // null when branch didn't report
+  remainingBalance?: number | null;
+  weekendForecast?: number | null;
+  nextSupplyDate?: string | null;
+}
+
+export interface PurchaseOrderDetail extends PurchaseOrder {
+  items: PurchaseOrderItem[];
+}
+
+export interface PurchaseOrderGroupedItem {
+  itemId?: string | null;
+  name: string;
+  unit?: string;
+  totalQuantity: number;
+  unitPrice: number; // SAR float
+  capacity?: number | null; // supplier declared stock; null = "no data", render «—»
+  capacityPct?: number | null;
+  exceeded?: boolean | null;
+  excessQuantity?: number | null;
+}
+
+export interface PurchaseOrderGroupedSupplier {
+  supplierId: string;
+  supplierName: string;
+  ordersCount: number;
+  branchesCount: number;
+  cities: string[];
+  urgentCount: number;
+  totalAmount: number; // SAR float
+  itemsCount: number;
+  capacityExceeded: boolean;
+  orderIds: string[];
+  items: PurchaseOrderGroupedItem[];
+}
+
+export interface PurchaseOrderGroupedCity {
+  city: string;
+  ordersCount: number;
+  urgentCount: number;
+  totalAmount: number; // SAR float
+  suppliers: string[];
+  orderIds: string[];
+}
+
+export interface PurchaseOrderGroupedResponse {
+  suppliers?: PurchaseOrderGroupedSupplier[];
+  unassignedOrders?: Array<{
+    id: string;
+    orderNumber: string;
+    branchName?: string;
+    totalAmount: number;
+  }>;
+  cities?: PurchaseOrderGroupedCity[];
+}
+
+export interface PurchaseOrderSentGroup {
+  groupId: string;
+  groupNumber: string;
+  supplierId: string;
+  supplierName: string;
+  ordersCount: number;
+  totalAmount: number; // SAR float
+  status: "confirmed" | "preparing" | "on_the_way" | "delivered" | string;
+  sentAt: string;
+}
+
+export interface PurchaseOrderGroupDetail extends PurchaseOrderSentGroup {
+  items: PurchaseOrderGroupedItem[];
+  orders: Array<{
+    id: string;
+    orderNumber: string;
+    branchId: string;
+    branchName?: string;
+    city?: string;
+    status: string;
+    statusLabel?: string;
+    totalAmount: number;
+  }>;
+}
+
+export interface PurchaseOrderSendResult {
+  groupId: string;
+  groupNumber: string;
+  supplierId: string;
+  ordersCount: number;
+  sentAt: string;
+}
+
+export interface PurchaseOrderBulkApproveResult {
+  approved: string[];
+  failed: Array<{ id: string; reason: string }>;
+  count: number;
+}
+
 // ─── Supplier ───────────────────────────────────────────────────────────────
 export interface SupplierOverview {
   kpis: {
