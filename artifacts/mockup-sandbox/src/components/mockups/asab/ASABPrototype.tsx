@@ -13348,7 +13348,7 @@ function ProcItems({}: PageProps) {
   const [editForm, setEditForm] = useState({ name:"", unit:"", category:"", price:"" });
   const [historyId, setHistoryId] = useState<string|null>(null);
   const { data: priceHistory } = useItemPriceHistory(historyId ?? undefined);
-  const categories = ((catLookup as any[]) ?? []);
+  const categories = (((catLookup as any)?.data ?? catLookup ?? []) as any[]);
   const catLabel = (c:any) => c.labelAr ?? c.label ?? c.name ?? c.value ?? c.key ?? "";
   const catValue = (c:any) => c.value ?? c.key ?? c.id ?? catLabel(c);
   const priceOf = (item:any) => { const h = item.lastPriceHalalas ?? item.priceHalalas; return h!=null ? h/100 : (item.defaultPrice ?? null); };
@@ -13482,7 +13482,7 @@ function ProcSuppliers({}: PageProps) {
   const [rateFor, setRateFor] = useState<{id:string;name:string}|null>(null);
   const [rateValue, setRateValue] = useState(5);
   const [rateComment, setRateComment] = useState("");
-  const categories = ((catLookup as any[]) ?? []);
+  const categories = (((catLookup as any)?.data ?? catLookup ?? []) as any[]);
   const catLabel = (c:any) => c.labelAr ?? c.label ?? c.name ?? c.value ?? c.key ?? "";
   const catValue = (c:any) => c.value ?? c.key ?? c.id ?? catLabel(c);
   const starsOf = (sup:any) => { const a = sup.ratingAvg; return a!=null ? a/10 : (sup.rating ?? 0); };
