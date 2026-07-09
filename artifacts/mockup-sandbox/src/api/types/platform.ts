@@ -478,6 +478,24 @@ export type PlatformBranchReportType =
   | "purchases"
   | "expenses";
 
+/**
+ * Cashier provisioning outcome, present on the add-employee response when the
+ * role is a cashier ("cashier" / "كاشير" / "أمين صندوق", case-insensitive).
+ * `provisioned:false` with reason EMAIL_REQUIRED / NO_BRANCH_MANAGER means the
+ * admin record was created but no mobile login account was.
+ */
+export interface CashierProvisioning {
+  provisioned: boolean;
+  cashierId?: string | null;
+  emailSent?: boolean;
+  reason:
+    | null
+    | "LINKED_EXISTING"
+    | "RESTORED_EXISTING"
+    | "EMAIL_REQUIRED"
+    | "NO_BRANCH_MANAGER";
+}
+
 export interface PlatformBranchEmployee {
   id: string;
   empNumber: string;
@@ -487,6 +505,11 @@ export interface PlatformBranchEmployee {
   monthlySalary?: number;
   shiftType?: string;
   hireDate?: string;
+  /** Cashier login-account fields (required to provision a mobile account). */
+  email?: string;
+  phone?: string;
+  /** Present when the added employee triggered cashier provisioning. */
+  cashier?: CashierProvisioning;
 }
 
 export interface PlatformBranchSettings {
@@ -495,7 +518,36 @@ export interface PlatformBranchSettings {
   deliveryAppsEnabled?: string[];
   cashAlertThreshold?: number;
   notificationPrefs?: { newReminders: boolean; opsApproved: boolean };
+  /** Display-only fields sourced from the admin record (see readOnlyFields). */
+  branchName?: string;
+  phone?: string;
+  address?: string;
+  /** Field names the branch manager may NOT edit — render them disabled. */
+  readOnlyFields?: string[];
+  /** Shift config is owned by the admin; `readOnly` marks the whole block. */
+  shiftConfig?: { readOnly?: boolean; [k: string]: unknown };
   [k: string]: unknown;
+}
+
+/** GET /company/me/branch/inventory-items → branch-assigned items (or brand catalog). */
+export interface PlatformBranchInventoryItems {
+  items: Array<{ id: string; name: string; unit?: string; cat?: string }>;
+  /** Name of whoever configured the list, or null when it falls back to the catalog. */
+  configuredBy: string | null;
+}
+
+/** GET /company/me/branch/suppliers → the branch's own company's active suppliers. */
+export interface PlatformBranchSupplierRow {
+  id: string;
+  name: string;
+  category?: string;
+  contactName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  paymentTerms?: string;
+  rating?: number;
+  status?: string;
+  isActive?: boolean;
 }
 
 // ─── Procurement (platform) ────────────────────────────────────────────────

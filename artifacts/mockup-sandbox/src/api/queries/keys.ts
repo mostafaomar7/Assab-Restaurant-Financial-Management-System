@@ -162,6 +162,7 @@ export const queryKeys = {
   platformAdminAuditLogs: (filter?: AdminAuditLogsFilter) =>
     ["platform", "admin", "audit-logs", { filter }] as const,
   platformAdminSettings: ["platform", "admin", "settings"] as const,
+  platformAdminPackages: ["platform", "admin", "packages"] as const,
   platformAdminReportsCatalog: ["platform", "admin", "reports", "catalog"] as const,
   platformAdminBrandUploadStatus: (brandId: string) =>
     ["platform", "admin", "brands", brandId, "upload-status"] as const,

@@ -38,6 +38,8 @@ export interface BranchItem {
   name: string;
   unit?: string;
   category?: string;
+  /** New backend uses `cat`; kept alongside `category` for compatibility. */
+  cat?: string;
   currQty?: number;
   prevQty?: number;
   lastCountedAt?: string;
@@ -59,6 +61,13 @@ export interface BranchSupplier {
   name: string;
   category?: string;
   phone?: string;
+  /** New backend fields (own-company active suppliers only). */
+  contactName?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  paymentTerms?: string;
+  rating?: number;
+  status?: string;
   isPreferred?: boolean;
   isActive: boolean;
 }
@@ -72,6 +81,13 @@ export interface BranchSettings {
   address?: string;
   phone?: string;
   uploadTime?: string;
+  workingHours?: { open: string; close: string };
+  autoCloseShift?: boolean;
+  cashAlertThreshold?: number;
+  /** Field names sourced from the admin record — render these disabled. */
+  readOnlyFields?: string[];
+  /** Admin-owned shift config; `readOnly` marks the block as locked. */
+  shiftConfig?: { readOnly?: boolean; [k: string]: unknown };
   [k: string]: unknown;
 }
 
@@ -114,12 +130,17 @@ export function useBranchEmployees() {
 export function useBranchItems() {
   return useQuery({
     queryKey: queryKeys.branchItems,
+    // Backend now returns { items:[{id,name,unit,cat}], configuredBy }.
+    // Still tolerate the legacy array / { data } shapes.
     queryFn: async () => {
-      const res = await api.get<{ data: BranchItem[] } | BranchItem[]>(
-        "/company/me/branch/items",
-      );
-      const d = res.data as { data?: BranchItem[] } | BranchItem[];
-      return Array.isArray(d) ? d : (d.data ?? []);
+      const res = await api.get<
+        { items?: BranchItem[]; data?: BranchItem[] } | BranchItem[]
+      >("/company/me/branch/items");
+      const d = res.data as
+        | { items?: BranchItem[]; data?: BranchItem[] }
+        | BranchItem[];
+      if (Array.isArray(d)) return d;
+      return d.items ?? d.data ?? [];
     },
   });
 }

@@ -524,6 +524,10 @@ export function useAdminUsers(filter: AdminUsersFilter = {}) {
   });
 }
 
+// Backend validation (enforced now — send the right fields or get 422):
+//  role "branch"     → `branches` array of EXACTLY one branch id (size:1)
+//  role "accountant" → `brands`   array of at least one brand id (min:1)
+//  For both, the backend fixes `scope` itself — no need to send `scope`.
 export function useCreateAdminUser() {
   const qc = useQueryClient();
   return useMutation({
@@ -761,6 +765,9 @@ export function useMoveToHead() {
 }
 
 // ─── Accountant assignments — consolidated (contract 1.8 / 1.9) ──────────────
+// Meeting rule: an accountant is assigned to a BRAND (not a restaurant/branch).
+// Send `brands` → backend sets scope=brand and clears any legacy restaurant ids.
+// `restaurants` is still accepted for backward compatibility.
 export function useUpdateAccountantAssignments() {
   const qc = useQueryClient();
   return useMutation({
@@ -770,7 +777,8 @@ export function useUpdateAccountantAssignments() {
     }: {
       accId: string;
       headId?: string | null;
-      restaurants: string[];
+      brands?: string[];
+      restaurants?: string[];
     }) => {
       const res = await api.patch(`/admin/accountants/${accId}/assignments`, body);
       return res.data;

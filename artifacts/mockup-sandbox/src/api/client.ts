@@ -4,7 +4,7 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 import { getTokens, setTokens, clearTokens } from "./tokens";
-import { ApiError, type ApiErrorBody } from "./errors";
+import { ApiError, isErrorBody, type ApiErrorBody } from "./errors";
 
 const BASE_RAW = import.meta.env.VITE_API_BASE_URL ?? "";
 const BASE = BASE_RAW.replace(/\/$/, "");
@@ -118,7 +118,7 @@ api.interceptors.response.use(
       window.dispatchEvent(new CustomEvent("asab:auth:logout"));
     }
 
-    if (body && typeof body === "object" && "error" in body) {
+    if (isErrorBody(body)) {
       throw new ApiError(body as ApiErrorBody, status ?? 0);
     }
 

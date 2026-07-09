@@ -4963,15 +4963,19 @@ function BranchSettings() {
   }, [apiSettings]);
   const branchBrand = apiSettings?.brandName || MY_BRANCH.brand;
   const branchCity  = apiSettings?.city      || MY_BRANCH.city;
+  // branchName / phone / address are admin-owned now; the backend ignores edits.
+  const readOnlyFields = new Set(apiSettings?.readOnlyFields ?? ["branchName","phone","address"]);
+  const lockedInput = "w-full text-sm border border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-400 cursor-not-allowed";
+  const editInput   = "w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400";
   return (
     <div className="space-y-5" dir={dir}>
       <div><h2 className="text-xl font-bold text-gray-800">{t("إعدادات الفرع","Branch Settings")}</h2><p className="text-gray-400 text-sm">{branchBrand}</p></div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-4">
         <h3 className="font-bold text-gray-800 text-sm border-b border-gray-100 pb-2">{t("بيانات الفرع الأساسية","Basic Branch Info")}</h3>
         <div className="grid grid-cols-2 gap-4">
-          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("اسم الفرع","Branch Name")}</label><input value={branchName} onChange={e=>setBranchName(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
-          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("مدير الفرع","Branch Manager")}</label><input value={manager} onChange={e=>setManager(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
-          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("رقم الهاتف","Phone")}</label><input value={phone} onChange={e=>setPhone(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400" dir="ltr"/></div>
+          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("اسم الفرع","Branch Name")}{readOnlyFields.has("branchName") && <span className="text-gray-300 font-normal"> · {t("من إدارة النظام","set by admin")}</span>}</label><input value={branchName} onChange={e=>setBranchName(e.target.value)} readOnly={readOnlyFields.has("branchName")} className={readOnlyFields.has("branchName")?lockedInput:editInput}/></div>
+          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("مدير الفرع","Branch Manager")}</label><input value={manager} onChange={e=>setManager(e.target.value)} className={editInput}/></div>
+          <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("رقم الهاتف","Phone")}{readOnlyFields.has("phone") && <span className="text-gray-300 font-normal"> · {t("من إدارة النظام","set by admin")}</span>}</label><input value={phone} onChange={e=>setPhone(e.target.value)} readOnly={readOnlyFields.has("phone")} className={readOnlyFields.has("phone")?lockedInput:editInput} dir="ltr"/></div>
           <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("المدينة","City")}</label><input value={branchCity} readOnly className="w-full text-sm border border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50 text-gray-400"/></div>
         </div>
         <div className="flex justify-end pt-2"><Btn variant="primary" onClick={()=>updateBranchMut.mutate({branchName, managerName:manager} as any)}><Check size={13}/> {t("حفظ التغييرات","Save Changes")}</Btn></div>

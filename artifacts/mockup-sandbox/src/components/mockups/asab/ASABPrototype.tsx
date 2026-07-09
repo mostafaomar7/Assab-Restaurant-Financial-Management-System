@@ -74,6 +74,11 @@ import {
   useCreateAdminUser,
   useCreateAdminCompany,
   useCreateAdminBrand,
+  useAdminPackages,
+  useCreateAdminPackage,
+  useUpdateAdminPackage,
+  useDeleteAdminPackage,
+  type AdminPackage,
   useResetBrandOwnerPassword,
   useCreateAdminRestaurant,
   useCreateAdminSubscription,
@@ -108,6 +113,7 @@ import {
   // Branch (platform)
   useBranchOverviewPlatform,
   useBranchEmployeesPlatform,
+  useAddBranchEmployeePlatform,
   useBranchInventoryItemsPlatform,
   useBranchSuppliersPlatform,
   useBranchUploadStatusPlatform,
@@ -305,6 +311,7 @@ const EN_NAV_LABELS: Record<string, string> = {
   "head-erp":"ERP Export","head-reports":"Reports",
   "admin-overview":"Overview","admin-users":"Users",
   "admin-restaurants":"Restaurants & Branches","admin-subscriptions":"Subscriptions",
+  "admin-packages":"Packages",
   "admin-companies":"Company Subscriptions","admin-permissions":"Permissions",
   "admin-reports":"Report Manager","admin-audit":"Activity Log",
   "admin-settings":"System Settings",
@@ -542,6 +549,7 @@ const NAV_CONFIG: Record<RoleId, NavEntry[]> = {
     { id:"admin-users",          label:"المستخدمون",        icon:<Users size={16}/>,           badge:3 },
     { id:"admin-restaurants",    label:"المطاعم والفروع",   icon:<Home size={16}/> },
     { id:"admin-subscriptions",  label:"الاشتراكات",        icon:<Shield size={16}/>,          badge:2, badgeColor:"yellow" as const },
+    { id:"admin-packages",       label:"الباقات",           icon:<Package size={16}/> },
     { id:"admin-companies",      label:"اشتراكات الشركات",  icon:<Building2 size={16}/>,       badge:5, badgeColor:"yellow" as const },
     { id:"admin-permissions",    label:"الصلاحيات",         icon:<Settings size={16}/> },
     { section:"التقارير" },
@@ -1813,6 +1821,7 @@ function PageRouter({ state, pageProps, adminUsers, setAdminUsers }:{
     if(page==="admin-users")         return <AdminUsers {...p} users={adminUsers} setUsers={setAdminUsers}/>;
     if(page==="admin-restaurants")   return <AdminRestaurants {...p}/>;
     if(page==="admin-subscriptions") return <AdminSubscriptions {...p}/>;
+    if(page==="admin-packages")      return <AdminPackages {...p}/>;
     if(page==="admin-companies")     return <AdminCompanies {...p}/>;
     if(page==="admin-reports")       return <AdminReports {...p}/>;
     if(page==="admin-audit")         return <AdminAudit {...p}/>;
@@ -10240,6 +10249,131 @@ const BRANDS_DATA = [
   },
 ];
 
+// ════════════════════════════════════════════════════════════
+// PACKAGES MANAGEMENT (admin) — CRUD over GET/POST/PATCH/DELETE /admin/packages
+// ════════════════════════════════════════════════════════════
+function AdminPackages({}: PageProps) {
+  const { t } = useLang();
+  const { data: packages = [], isLoading, isError } = useAdminPackages();
+  const createMut = useCreateAdminPackage();
+  const updateMut = useUpdateAdminPackage();
+  const deleteMut = useDeleteAdminPackage();
+  const [editing, setEditing] = useState<AdminPackage | "new" | null>(null);
+  const emptyForm = { code:"", name:"", nameEn:"", priceSar:"", isActive:true };
+  const [form, setForm] = useState(emptyForm);
+  const busy = createMut.isPending || updateMut.isPending;
+
+  const openNew  = () => { setForm(emptyForm); setEditing("new"); };
+  const openEdit = (p: AdminPackage) => {
+    setForm({ code:p.code, name:p.name, nameEn:p.nameEn ?? "", priceSar:String((p.price ?? 0)/100), isActive:p.isActive });
+    setEditing(p);
+  };
+  const close = () => setEditing(null);
+  // Price is stored in halalas (project convention); the form edits SAR.
+  const save = () => {
+    if (!form.code.trim() || !form.name.trim()) return;
+    const body = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      nameEn: form.nameEn.trim() || undefined,
+      price: Math.round((parseFloat(form.priceSar) || 0) * 100),
+      isActive: form.isActive,
+    };
+    if (editing === "new") createMut.mutate(body, { onSuccess: close });
+    else if (editing)      updateMut.mutate({ id: editing.id, ...body }, { onSuccess: close });
+  };
+  const remove = (p: AdminPackage) => {
+    if (window.confirm(t(`حذف الباقة "${p.name}"؟`, `Delete package "${p.name}"?`))) deleteMut.mutate(p.id);
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">{t("الباقات","Packages")}</h2>
+          <p className="text-gray-400 text-sm mt-0.5">{t("باقات الاشتراك المتاحة عند إنشاء العلامات التجارية","Subscription packages offered when creating brands")}</p>
+        </div>
+        <Btn variant="primary" onClick={openNew}><Plus size={14}/> {t("باقة جديدة","New Package")}</Btn>
+      </div>
+
+      {isError && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-amber-800 text-xs">
+          {t("تعذّر تحميل الباقات — تأكد أن الباك يدعم /admin/packages (قد لا يكون منشوراً بعد).","Couldn't load packages — check that the backend exposes /admin/packages (it may not be deployed yet).")}
+        </div>
+      )}
+
+      <Card title={`${t("الباقات","Packages")} ${packages.length ? `(${packages.length})` : ""}`}>
+        {isLoading ? (
+          <div className="p-8 text-center text-gray-400 text-sm">{t("جارٍ التحميل…","Loading…")}</div>
+        ) : packages.length === 0 ? (
+          <div className="p-8 text-center text-gray-400 text-sm">{t("لا توجد باقات بعد.","No packages yet.")}</div>
+        ) : (
+          <table className="w-full" dir="rtl">
+            <thead className="bg-gray-50"><tr className="text-xs text-gray-500 font-semibold">
+              <th className="px-4 py-3 text-right">{t("الكود","Code")}</th>
+              <th className="px-4 py-3 text-right">{t("الاسم","Name")}</th>
+              <th className="px-4 py-3 text-center">{t("السعر (ر.س)","Price (SAR)")}</th>
+              <th className="px-4 py-3 text-center">{t("الحالة","Status")}</th>
+              <th className="px-4 py-3 text-center">{t("إجراءات","Actions")}</th>
+            </tr></thead>
+            <tbody className="divide-y divide-gray-100">
+              {packages.map((p)=>(
+                <tr key={p.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3"><span className="font-mono text-xs bg-gray-100 rounded px-2 py-0.5 text-gray-600">{p.code}</span></td>
+                  <td className="px-4 py-3 text-sm font-semibold text-gray-800">{p.name}{p.nameEn && <span className="text-gray-400 font-normal text-xs"> · {p.nameEn}</span>}</td>
+                  <td className="px-4 py-3 text-center font-mono text-sm">{((p.price ?? 0)/100).toLocaleString()}</td>
+                  <td className="px-4 py-3 text-center">
+                    <button onClick={()=>updateMut.mutate({ id:p.id, isActive:!p.isActive })} disabled={updateMut.isPending}>
+                      <Badge className={p.isActive?"bg-emerald-50 text-emerald-700 border border-emerald-200":"bg-gray-100 text-gray-500 border border-gray-200"}>{p.isActive?t("نشطة","Active"):t("موقوفة","Inactive")}</Badge>
+                    </button>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-center gap-2">
+                      <Btn size="sm" onClick={()=>openEdit(p)}>{t("تعديل","Edit")}</Btn>
+                      <Btn size="sm" variant="danger" onClick={()=>remove(p)} disabled={deleteMut.isPending}>{t("حذف","Delete")}</Btn>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </Card>
+
+      {editing && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={close}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e=>e.stopPropagation()} dir="rtl">
+            <div className="px-5 py-4 bg-gradient-to-l from-purple-700 to-purple-600 text-white flex items-center justify-between">
+              <h3 className="font-bold">{editing==="new"?t("إضافة باقة","Add Package"):t("تعديل باقة","Edit Package")}</h3>
+              <button onClick={close} className="text-purple-200 hover:text-white"><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الكود","Code")} <span className="text-red-500">*</span></label>
+                  <input value={form.code} onChange={e=>setForm(f=>({...f,code:e.target.value}))} disabled={editing!=="new"} dir="ltr" placeholder="gold" className={`w-full text-sm border rounded-xl px-3 py-2.5 outline-none ${editing!=="new"?"border-gray-100 bg-gray-50 text-gray-400":"border-gray-200 focus:border-purple-400"}`}/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("السعر (ر.س)","Price (SAR)")}</label>
+                  <input type="number" value={form.priceSar} onChange={e=>setForm(f=>({...f,priceSar:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الاسم (عربي)","Name (Arabic)")} <span className="text-red-500">*</span></label>
+                  <input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} placeholder="ذهبي" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الاسم (إنجليزي)","Name (English)")}</label>
+                  <input value={form.nameEn} onChange={e=>setForm(f=>({...f,nameEn:e.target.value}))} dir="ltr" placeholder="Gold" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="checkbox" checked={form.isActive} onChange={e=>setForm(f=>({...f,isActive:e.target.checked}))} className="w-4 h-4 accent-purple-600"/>
+                {t("باقة نشطة (تظهر عند إنشاء العلامات)","Active (shown when creating brands)")}
+              </label>
+              <div className="flex gap-2 justify-end pt-1">
+                <Btn onClick={close}>{t("إلغاء","Cancel")}</Btn>
+                <Btn variant="primary" disabled={!form.code.trim()||!form.name.trim()||busy} onClick={save}><Check size={13}/> {t("حفظ","Save")}</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminRestaurants({}: PageProps) {
   const { data: brandsApi } = useAdminBrands();
   useAdminRestaurantSubscriptions();
@@ -10251,7 +10385,19 @@ function AdminRestaurants({}: PageProps) {
   const updateRestMut = useUpdateAdminRestaurant();
   const { data: companiesApi } = useAdminCompanies();
   const companyOptions = (((companiesApi as any)?.data ?? companiesApi ?? []) as any[]);
+  // Packages now come from GET /admin/packages (show active only). The brand's
+  // `plan` field carries the chosen package `code`.
+  const { data: packagesApi = [] } = useAdminPackages();
+  const activePackages = packagesApi.filter(p => p.isActive);
   const [brandForm, setBrandForm] = useState({ name:"", owner:"", ownerEmail:"", plan:"فضي", companyId:"" });
+  // Once packages load, normalize the plan to a real package code so the select
+  // reflects a valid option instead of the legacy Arabic placeholder.
+  useEffect(() => {
+    if (activePackages.length && !activePackages.some(p => p.code === brandForm.plan)) {
+      setBrandForm(f => ({ ...f, plan: activePackages[0].code }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packagesApi]);
   const [restForm, setRestForm] = useState({ brandId:"", name:"", city:"" });
   const [addBranchRest, setAddBranchRest] = useState<string|null>(null);
   const [branchName, setBranchName] = useState("");
@@ -10641,7 +10787,11 @@ function AdminRestaurants({}: PageProps) {
             <div><label className="text-xs text-gray-500 block mb-1">{t("اسم العلامة","Brand Name")}</label><input value={brandForm.name} onChange={e=>setBrandForm(f=>({...f,name:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("علامة جديدة","New brand")}/></div>
             <div><label className="text-xs text-gray-500 block mb-1">{t("المالك / المسؤول","Owner / Manager")}</label><input value={brandForm.owner} onChange={e=>setBrandForm(f=>({...f,owner:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("اسم المالك","Owner name")}/></div>
             <div><label className="text-xs text-gray-500 block mb-1">{t("الباقة","Plan")}</label>
-              <select value={brandForm.plan} onChange={e=>setBrandForm(f=>({...f,plan:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"><option>فضي</option><option>ذهبي</option><option>بلاتيني</option></select></div>
+              <select value={brandForm.plan} onChange={e=>setBrandForm(f=>({...f,plan:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                {activePackages.length
+                  ? activePackages.map(p=><option key={p.id} value={p.code}>{p.name}</option>)
+                  : (<><option>فضي</option><option>ذهبي</option><option>بلاتيني</option></>)}
+              </select></div>
           </div>
           <div className="mt-3"><label className="text-xs text-gray-500 block mb-1">{t("بريد المالك (اختياري)","Owner Email (optional)")}</label>
             <input type="email" dir="ltr" value={brandForm.ownerEmail} onChange={e=>setBrandForm(f=>({...f,ownerEmail:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-right" placeholder="owner@example.com"/>
@@ -12397,13 +12547,72 @@ function BranchOverview({ navigate }: PageProps) {
   );
 }
 
+// Roles that provision a real mobile login account on the backend.
+const CASHIER_ROLES = ["كاشير", "أمين صندوق", "cashier"];
+const isCashierRole = (role: string) =>
+  CASHIER_ROLES.some((r) => r.toLowerCase() === role.trim().toLowerCase());
+
 function BranchEmployees({}: PageProps) {
   const { t } = useLang();
   const { data: apiEmps = [] } = useBranchEmployeesPlatform();
+  const addEmpMut = useAddBranchEmployeePlatform();
   const emps = ((apiEmps as any[]).length > 0 ? (apiEmps as any) : []) as any[];
+  const [showAdd, setShowAdd] = useState(false);
+  const emptyForm = { name:"", empNumber:"", role:"كاشير", salary:"", shift:"صباحي", email:"", phone:"" };
+  const [form, setForm] = useState(emptyForm);
+  const cashier = isCashierRole(form.role);
+  // For a cashier, email is required to create the mobile login account.
+  const emailMissing = cashier && !form.email.trim();
+  const canSubmit = form.name.trim() && form.empNumber.trim() && !emailMissing && !addEmpMut.isPending;
+  const submit = () => {
+    if (!canSubmit) return;
+    addEmpMut.mutate(
+      {
+        name: form.name.trim(),
+        empNumber: form.empNumber.trim(),
+        role: form.role,
+        salaryHalalas: Math.round((parseFloat(form.salary) || 0) * 100),
+        shift: form.shift,
+        email: form.email.trim() || undefined,
+        phone: form.phone.trim() || undefined,
+      },
+      { onSuccess: () => { setShowAdd(false); setForm(emptyForm); } },
+    );
+  };
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2><Btn variant="primary" size="sm"><Plus size={13}/> {t("إضافة موظف","Add Employee")}</Btn></div>
+      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2><Btn variant="primary" size="sm" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة موظف","Add Employee")}</Btn></div>
+      {showAdd && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setShowAdd(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e=>e.stopPropagation()} dir="rtl">
+            <div className="px-5 py-4 bg-gradient-to-l from-purple-700 to-purple-600 text-white flex items-center justify-between">
+              <h3 className="font-bold">{t("إضافة موظف","Add Employee")}</h3>
+              <button onClick={()=>setShowAdd(false)} className="text-purple-200 hover:text-white"><X size={18}/></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الاسم","Name")} <span className="text-red-500">*</span></label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الرقم الوظيفي","Emp. No.")} <span className="text-red-500">*</span></label><input value={form.empNumber} onChange={e=>setForm(f=>({...f,empNumber:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الدور","Role")}</label>
+                  <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>كاشير</option><option>أمين صندوق</option><option>مشرف</option><option>عامل</option></select></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الشفت","Shift")}</label>
+                  <select value={form.shift} onChange={e=>setForm(f=>({...f,shift:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>صباحي</option><option>مسائي</option><option>كامل</option></select></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الراتب (ر.س)","Salary (SAR)")}</label><input type="number" value={form.salary} onChange={e=>setForm(f=>({...f,salary:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+                <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الهاتف","Phone")}</label><input dir="ltr" value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">{t("البريد الإلكتروني","Email")} {cashier && <span className="text-red-500">*</span>}</label>
+                <input type="email" dir="ltr" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className={`w-full text-sm border rounded-xl px-3 py-2.5 outline-none ${emailMissing?"border-red-300 focus:border-red-400":"border-gray-200 focus:border-purple-400"}`} placeholder="cashier@example.com"/>
+                <p className={`text-[11px] mt-1 ${emailMissing?"text-red-500":"text-gray-400"}`}>{cashier ? t("مطلوب للكاشير — يُنشأ حساب دخول للتطبيق وتُرسل كلمة المرور على البريد.","Required for cashiers — a mobile login account is created and the password is emailed.") : t("اختياري لغير الكاشير.","Optional for non-cashier roles.")}</p>
+              </div>
+              <div className="flex gap-2 justify-end pt-1">
+                <Btn onClick={()=>setShowAdd(false)}>{t("إلغاء","Cancel")}</Btn>
+                <Btn variant="primary" disabled={!canSubmit} onClick={submit}><Plus size={13}/> {t("إضافة","Add")}</Btn>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       <Card title={t("فرع الرياض العليا","Riyadh Al-Olaya Branch")}>
         <table className="w-full" dir="rtl">
           <thead className="bg-gray-50"><tr className="text-xs text-gray-500 font-semibold"><th className="px-4 py-3 text-right">{t("الموظف","Employee")}</th><th className="px-4 py-3 text-right">{t("الدور","Role")}</th><th className="px-4 py-3 text-center">{t("الراتب","Salary")}</th><th className="px-4 py-3 text-center">{t("الشفت","Shift")}</th><th className="px-4 py-3 text-center">{t("الحالة","Status")}</th></tr></thead>
@@ -13232,7 +13441,7 @@ function SupNewOrders({}: PageProps) {
 // ════════════════════════════════════════════════════════════
 function BranchSettings({ navigate }:PageProps) {
   const { t } = useLang();
-  useBranchSettingsPlatform();
+  const { data: apiSettings } = useBranchSettingsPlatform();
   const updateSettingsMut = useUpdateBranchSettingsPlatform();
   const [saved, setSaved] = useState(false);
   const [form, setForm] = useState({
@@ -13242,6 +13451,19 @@ function BranchSettings({ navigate }:PageProps) {
     taxNumber:"310012345600003", bankAccount:"SA1234567890123456789012",
     cashLimit:"5000", wasteThreshold:"3", autoReminders:true, requireImages:true
   });
+  // branchName / phone / address are owned by the admin record now — the backend
+  // ignores edits to them. Lock whatever it reports (default to those three).
+  const readOnlyFields = new Set(apiSettings?.readOnlyFields ?? ["branchName","phone","address"]);
+  // Seed the display-only fields from the admin record when it arrives.
+  useEffect(() => {
+    if (!apiSettings) return;
+    setForm(p => ({
+      ...p,
+      branchName: apiSettings.branchName ?? p.branchName,
+      phone: apiSettings.phone ?? p.phone,
+      address: apiSettings.address ?? p.address,
+    }));
+  }, [apiSettings]);
   // Contract 4.2: PATCH /company/me/branch/settings — persists the full settings form.
   const save = () => {
     updateSettingsMut.mutate({
@@ -13265,13 +13487,15 @@ function BranchSettings({ navigate }:PageProps) {
       <div className="grid grid-cols-2 gap-5">
         <Card title={`📋 ${t("البيانات الأساسية","Basic Information")}`}>
           <div className="p-4 space-y-3">
-            {[{label:t("اسم الفرع","Branch Name"),field:"branchName"},{label:t("مدير الفرع","Branch Manager"),field:"manager"},{label:t("رقم الهاتف","Phone"),field:"phone"},{label:t("العنوان","Address"),field:"address"}].map(({label,field})=>(
+            {[{label:t("اسم الفرع","Branch Name"),field:"branchName"},{label:t("مدير الفرع","Branch Manager"),field:"manager"},{label:t("رقم الهاتف","Phone"),field:"phone"},{label:t("العنوان","Address"),field:"address"}].map(({label,field})=>{
+              const locked = readOnlyFields.has(field);
+              return (
               <div key={field}>
-                <label className="text-[11px] font-semibold text-gray-500 block mb-1">{label}</label>
-                <input value={(form as any)[field]} onChange={e=>setForm(p=>({...p,[field]:e.target.value}))}
-                  className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/>
+                <label className="text-[11px] font-semibold text-gray-500 block mb-1">{label}{locked && <span className="text-gray-300 font-normal"> · {t("من إدارة النظام","set by admin")}</span>}</label>
+                <input value={(form as any)[field]} onChange={e=>setForm(p=>({...p,[field]:e.target.value}))} disabled={locked}
+                  className={`w-full text-sm border rounded-lg px-3 py-2 outline-none ${locked?"border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed":"border-gray-200 focus:border-purple-300"}`}/>
               </div>
-            ))}
+            );})}
           </div>
         </Card>
         <Card title={`⏰ ${t("أوقات العمل والشفتات","Working Hours & Shifts")}`}>

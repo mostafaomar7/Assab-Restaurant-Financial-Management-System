@@ -32,3 +32,4 @@ export * from "./sso";
 export * from "./apiKeys";
 export * from "./gdpr";
 export * from "./webhooks";
+export * from "./packages";

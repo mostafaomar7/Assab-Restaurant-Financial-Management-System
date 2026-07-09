@@ -8,9 +8,11 @@ import { api, type Page } from "../../client";
 import { getErrorMessage } from "../../errors";
 import type {
   PlatformBranchEmployee,
+  PlatformBranchInventoryItems,
   PlatformBranchOverview,
   PlatformBranchReportType,
   PlatformBranchSettings,
+  PlatformBranchSupplierRow,
   PlatformBranchUploadStatus,
 } from "../../types/platform";
 import { queryKeys } from "../keys";
@@ -83,8 +85,16 @@ export function useBranchEmployeesPlatform() {
 export function useAddBranchEmployeePlatform() {
   const qc = useQueryClient();
   return useMutation({
+    // For a cashier role (cashier / كاشير / أمين صندوق) pass `email` (and ideally
+    // `phone`) so the backend provisions a real mobile login account. The
+    // response carries a `cashier` block describing that outcome.
     mutationFn: async (
-      body: Partial<PlatformBranchEmployee> & { name: string; empNumber: string },
+      body: Partial<PlatformBranchEmployee> & {
+        name: string;
+        empNumber: string;
+        salaryHalalas?: number;
+        shift?: string;
+      },
     ) => {
       const res = await api.post<PlatformBranchEmployee>(
         "/company/me/branch/employees",
@@ -92,9 +102,18 @@ export function useAddBranchEmployeePlatform() {
       );
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["platform", "branch", "employees"] });
-      toast.success("تم إضافة الموظف");
+      // Surface the cashier-provisioning result so the manager knows whether a
+      // login account was actually created.
+      const c = data?.cashier;
+      if (c && !c.provisioned && c.reason === "EMAIL_REQUIRED") {
+        toast.warning("تم إضافة الموظف بدون حساب دخول — البريد الإلكتروني مطلوب للكاشير");
+      } else if (c?.provisioned && c.emailSent) {
+        toast.success("تم إضافة الكاشير وإرسال بيانات الدخول لبريده");
+      } else {
+        toast.success("تم إضافة الموظف");
+      }
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
@@ -105,7 +124,12 @@ export function useBranchInventoryItemsPlatform() {
   return useQuery({
     queryKey: queryKeys.platformBranchInventoryItems,
     queryFn: async () => {
-      const res = await api.get<unknown>("/company/me/branch/inventory-items");
+      // Doc §4: the company-scoped path is /company/me/branch/items (verified
+      // live, returns { items, configuredBy }). The old /inventory-items path
+      // 404s. (/branch/inventory-items is the branch-role direct variant.)
+      const res = await api.get<PlatformBranchInventoryItems>(
+        "/company/me/branch/items",
+      );
       return res.data;
     },
   });
@@ -115,8 +139,13 @@ export function useBranchSuppliersPlatform() {
   return useQuery({
     queryKey: queryKeys.platformBranchSuppliers,
     queryFn: async () => {
-      const res = await api.get<unknown>("/company/me/branch/suppliers");
-      return res.data;
+      const res = await api.get<
+        { data: PlatformBranchSupplierRow[] } | PlatformBranchSupplierRow[]
+      >("/company/me/branch/suppliers");
+      const d = res.data as
+        | { data?: PlatformBranchSupplierRow[] }
+        | PlatformBranchSupplierRow[];
+      return Array.isArray(d) ? d : (d.data ?? []);
     },
   });
 }

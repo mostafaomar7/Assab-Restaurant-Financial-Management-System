@@ -285,10 +285,17 @@ export function useCompanyUsers(filter: CompanyUsersFilter = {}) {
 export function useCreateCompanyUser() {
   const qc = useQueryClient();
   return useMutation({
+    // Backend rule: role "branch" needs branchId (exactly one branch),
+    // role "accountant" needs brandId (assigned to a brand, not a branch).
+    // Missing either → 422 { errors.code: "INVALID_ROLE_SCOPE" }.
     mutationFn: async (body: {
       email: string;
       name: string;
       role: string;
+      /** Required when role/roleKey === "accountant". */
+      brandId?: string;
+      /** Required when role/roleKey === "branch". */
+      branchId?: string;
       brandIds?: string[];
       branchIds?: string[];
     }) => {
