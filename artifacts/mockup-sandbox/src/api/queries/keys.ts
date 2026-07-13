@@ -18,13 +18,31 @@ export const queryKeys = {
   // Accountant dashboard
   accDashboard: ["accountant", "dashboard"] as const,
 
-  // Sales recon
-  salesDetails: (operationId: string) =>
-    ["sales-details", operationId] as const,
+  // Sales recon / KPIs / day completeness
+  salesKpis: (date?: string) => ["sales", "kpis", date ?? "today"] as const,
+  dayCompleteness: (days?: number) =>
+    ["sales", "day-completeness", days ?? 7] as const,
 
-  // Expenses
+  // Pipeline daily rollup
+  pipelineDailyRollup: (params?: Record<string, unknown>) =>
+    ["pipeline", "daily-rollup", params ?? {}] as const,
+
+  // Rejection reasons / operation enums catalogue
+  rejectionReasons: (moduleKey?: string) =>
+    ["lookups", "rejection-reasons", moduleKey ?? "all"] as const,
+  operationEnums: ["lookups", "operation-enums"] as const,
+
+  // Operation attachments
+  operationAttachments: (operationId: string) =>
+    ["operations", operationId, "attachments"] as const,
+
+  // Expenses (T05)
   expenseInvoices: (filter?: ExpenseFilter) =>
     ["expense-invoices", { filter }] as const,
+  expenseInvoiceAttachments: (id: string, invoiceIndex?: number) =>
+    ["expense-invoices", id, "attachments", invoiceIndex ?? "all"] as const,
+  expensesKpis: (params?: { dateFrom?: string; dateTo?: string }) =>
+    ["expenses", "kpis", params ?? {}] as const,
 
   // Inventory
   inventoryBranches: (filter?: InventoryBranchesFilter) =>
@@ -36,12 +54,21 @@ export const queryKeys = {
   // Waste
   waste: (filter?: WasteFilter) => ["waste", { filter }] as const,
 
-  // Assets
+  // Assets (T05)
   assets: (filter?: AssetFilter) => ["assets", { filter }] as const,
   assetDrafts: ["asset-drafts"] as const,
+  assetEnums: ["lookups", "asset-enums"] as const,
+  assetCategories: ["lookups", "asset-categories"] as const,
 
-  // Shifts
-  shifts: (filter?: ShiftFilter) => ["shifts", { filter }] as const,
+  // Purchases (T06)
+  suppliers: (filter?: SuppliersFilter) => ["suppliers", { filter }] as const,
+  purchaseReturns: (filter?: PurchaseReturnsFilter) =>
+    ["purchases", "returns", { filter }] as const,
+  purchaseEnums: ["lookups", "purchase-enums"] as const,
+
+  // Shifts (T08)
+  shiftsLive: ["shifts", "live"] as const,
+  shifts: (filter?: ShiftFilter) => ["shifts", "history", { filter }] as const,
   shiftConfigs: ["shifts", "configs"] as const,
 
   // Employees
@@ -268,7 +295,30 @@ export interface OperationsFilter {
   status?: OperationStatus | "all";
   branchId?: string;
   brandId?: string;
+  match?: "exact" | "review" | "diff" | "all";
+  origin?: "mobile" | "procurement" | "system" | "all";
+  /** Purchases (T06 §1). */
+  supplierId?: string;
+  source?: "supplier" | "branch" | "procurement" | "all";
   search?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+// ─── Purchases (T06) filters ─────────────────────────────────────────────────
+export interface SuppliersFilter {
+  search?: string;
+  category?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface PurchaseReturnsFilter {
+  status?: string;
+  branchId?: string;
   dateFrom?: string;
   dateTo?: string;
   page?: number;
@@ -283,6 +333,8 @@ export interface ExpenseFilter {
 }
 
 export interface InventoryBranchesFilter {
+  type?: "monthly" | "daily";
+  branchId?: string;
   date?: string;
   status?: "pending" | "confirmed" | "flagged" | "all";
 }
@@ -295,17 +347,23 @@ export interface WasteFilter {
 }
 
 export interface AssetFilter {
-  branchId?: string;
-  categoryId?: string;
-  confirmed?: boolean;
   search?: string;
+  category?: string;
+  status?: string;
+  branchId?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface ShiftFilter {
   branchId?: string;
-  status?: "open" | "closed" | "needs-review" | "all";
+  status?: "active" | "late" | "pending_review" | "closed" | "all";
+  shiftType?: string;
+  search?: string;
   dateFrom?: string;
   dateTo?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface EmployeeFilter {

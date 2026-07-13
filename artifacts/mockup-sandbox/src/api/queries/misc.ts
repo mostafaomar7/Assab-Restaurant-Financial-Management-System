@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../client";
+import type { DailyRollupEntry } from "../types/company";
 import { queryKeys, type AuditLogsFilter } from "./keys";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -45,11 +46,17 @@ export function useSearch(q: string, type?: string) {
 }
 
 // ─── Pipeline / Aggregation / Exceptions (shared cross-cutting) ─────────────
+export interface PipelineOverviewResponse {
+  stages: Array<{ key: string; labelAr: string; count: number }>;
+  throughputToday?: { submittedCount: number; completedCount: number };
+  avgCycleTimeHours?: number;
+}
+
 export function usePipelineOverview() {
   return useQuery({
     queryKey: ["pipeline", "overview"] as const,
     queryFn: async () => {
-      const res = await api.get<unknown>("/pipeline/overview");
+      const res = await api.get<PipelineOverviewResponse>("/pipeline/overview");
       return res.data;
     },
     staleTime: 30_000,
@@ -61,6 +68,42 @@ export function useModulesAggregation() {
     queryKey: ["modules", "aggregation"] as const,
     queryFn: async () => {
       const res = await api.get<unknown>("/modules/aggregation");
+      return res.data;
+    },
+    staleTime: 30_000,
+  });
+}
+
+// ─── Daily rollup — branch/day state chips (T03 §12) ────────────────────────
+export interface DailyRollupParams {
+  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  branchId?: string;
+  brandId?: string;
+  companyId?: string;
+}
+
+export interface DailyRollupResponse {
+  data: DailyRollupEntry[];
+  meta: {
+    dateFrom: string;
+    dateTo: string;
+    branchDays: number;
+    byState: Record<string, number>;
+  };
+}
+
+export function useDailyRollup(params: DailyRollupParams = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== ""),
+  );
+  return useQuery({
+    queryKey: queryKeys.pipelineDailyRollup(clean),
+    queryFn: async () => {
+      const res = await api.get<DailyRollupResponse>("/pipeline/daily-rollup", {
+        params: clean,
+      });
       return res.data;
     },
     staleTime: 30_000,

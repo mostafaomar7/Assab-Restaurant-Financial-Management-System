@@ -5,24 +5,28 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, downloadBlob } from "../client";
+import type { Operation } from "../types";
 import type {
-  SalesDetails,
-  SalesVarianceAssignmentPayload,
+  DayCompletenessEntry,
+  SalesDetailsPatchPayload,
+  SalesDetailsPatchResponse,
+  SalesKpis,
+  SalesVarianceAssignPayload,
+  SalesVarianceAssignResult,
 } from "../types/company";
 import { getErrorMessage } from "../errors";
 import { queryKeys } from "./keys";
+import { useOperation } from "./operations";
 
+// ─── Reconciliation (rides on the operation-detail response, T04 §4) ─────────
+// There is no separate GET sales-details endpoint — the `reconciliation` block
+// arrives on `GET /operations/{id}`. This wrapper keeps the old ergonomics.
 export function useSalesDetails(operationId: string | null | undefined) {
-  return useQuery({
-    queryKey: queryKeys.salesDetails(operationId ?? ""),
-    enabled: Boolean(operationId),
-    queryFn: async () => {
-      const res = await api.get<SalesDetails>(
-        `/operations/${operationId}/sales-details`,
-      );
-      return res.data;
-    },
-  });
+  const query = useOperation(operationId);
+  return {
+    ...query,
+    reconciliation: query.data?.reconciliation ?? null,
+  };
 }
 
 export function usePatchSalesDetails() {
@@ -33,18 +37,24 @@ export function usePatchSalesDetails() {
       payload,
     }: {
       operationId: string;
-      payload: Partial<SalesDetails>;
+      payload: SalesDetailsPatchPayload;
     }) => {
-      const res = await api.patch<SalesDetails>(
-        `/operations/${operationId}/sales-details`,
+      const res = await api.patch<SalesDetailsPatchResponse>(
+        `/company/me/operations/${operationId}/sales-details`,
         payload,
       );
       return res.data;
     },
-    onSuccess: (details) => {
-      qc.setQueryData(queryKeys.salesDetails(details.operationId), details);
+    onSuccess: (data, { operationId }) => {
+      // Fold the fresh reconciliation + re-derived match into the cached op detail.
+      qc.setQueryData<Operation>(queryKeys.operation(operationId), (prev) =>
+        prev
+          ? { ...prev, reconciliation: data.reconciliation, match: data.match }
+          : prev,
+      );
+      qc.invalidateQueries({ queryKey: queryKeys.operation(operationId) });
       qc.invalidateQueries({ queryKey: ["operations"] });
-      toast.success("تم حفظ التعديلات");
+      toast.success("تم حفظ التسوية");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
@@ -58,23 +68,53 @@ export function useAssignSalesVariance() {
       payload,
     }: {
       operationId: string;
-      payload: SalesVarianceAssignmentPayload;
+      payload: SalesVarianceAssignPayload;
     }) => {
-      const res = await api.post(
-        `/operations/${operationId}/sales-variance/assign`,
+      const res = await api.post<SalesVarianceAssignResult>(
+        `/company/me/operations/${operationId}/sales-variance/assign`,
         payload,
       );
       return res.data;
     },
     onSuccess: (_data, { operationId }) => {
-      qc.invalidateQueries({ queryKey: queryKeys.salesDetails(operationId) });
+      qc.invalidateQueries({ queryKey: queryKeys.operation(operationId) });
       qc.invalidateQueries({ queryKey: ["operations"] });
-      toast.success("تم إسناد الفرق");
+      toast.success("تم تحميل الفرق على الموظفين");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }
 
+// ─── Sales KPIs + variance banner (T04 §2) ──────────────────────────────────
+export function useSalesKpis(date?: string) {
+  return useQuery({
+    queryKey: queryKeys.salesKpis(date),
+    queryFn: async () => {
+      const res = await api.get<SalesKpis>("/company/me/sales/kpis", {
+        params: date ? { date } : undefined,
+      });
+      return res.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+// ─── Day completeness (day pills, T04 §3) ────────────────────────────────────
+export function useSalesDayCompleteness(days = 7) {
+  return useQuery({
+    queryKey: queryKeys.dayCompleteness(days),
+    queryFn: async () => {
+      const res = await api.get<
+        { data: DayCompletenessEntry[] } | DayCompletenessEntry[]
+      >("/company/me/sales/day-completeness", { params: { days } });
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+    staleTime: 30_000,
+  });
+}
+
+// ─── Exports ─────────────────────────────────────────────────────────────────
 export function useExportOperationDetail() {
   return useMutation({
     mutationFn: async ({

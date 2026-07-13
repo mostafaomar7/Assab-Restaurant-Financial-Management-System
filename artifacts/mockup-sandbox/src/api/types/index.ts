@@ -53,11 +53,32 @@ export type OperationStatus =
   | "final-approved"
   | "rejected";
 
-export type MatchStatus = "match" | "variance" | "unknown";
+export type MatchStatus = "exact" | "review" | "diff";
+
+export type OperationOrigin = "mobile" | "procurement" | "system";
 
 export interface OperationActor {
   id: string;
   name: string;
+}
+
+/** `GET /operations` row's ready-made lifecycle badge (T03 §1 notes). */
+export interface OperationStage {
+  key: "submit" | "review" | "approved" | "final" | "erp" | "reports" | "rejected";
+  step: number;
+  icon: string;
+  labelAr: string;
+  labelShortAr: string;
+}
+
+/** Sales-module rows only (T04 §8); `null` until the operation is reconciled. */
+export interface SalesBreakdown {
+  cashHalalas: number;
+  cardHalalas: number;
+  appsHalalas: number;
+  totalSalesHalalas: number;
+  collectedHalalas: number;
+  varianceHalalas: number;
 }
 
 export interface Operation {
@@ -65,9 +86,23 @@ export interface Operation {
   /** Human ID, e.g. "OPS-2401". */
   publicId: string;
   moduleKey: ModuleKey;
+  sourceModule?: string | null;
+  sourceId?: string | null;
   status: OperationStatus;
+  statusLabelAr?: string;
+  statusLabelShortAr?: string;
   match?: MatchStatus;
-  origin?: "branch-upload" | "system" | "manual";
+  matchLabelAr?: string;
+  diffNote?: string | null;
+  origin?: OperationOrigin;
+  originLabelAr?: string;
+  originIcon?: string;
+  attachmentCount?: number;
+  stage?: OperationStage;
+  /** Sales rows only; `null` until reconciled, absent on other modules. */
+  salesBreakdown?: SalesBreakdown | null;
+  /** Purchases list rows only (T06 §1); absent on other modules. */
+  purchaseRow?: import("./company").PurchaseRow | null;
   branchId: string;
   branchName: string;
   brandId?: string;
@@ -77,6 +112,7 @@ export interface Operation {
   /** Integer halalas. */
   amountHalalas: number;
   operationDate: string;
+  submittedAt?: string;
   createdAt: string;
   updatedAt: string;
   submittedBy?: OperationActor;
@@ -87,6 +123,7 @@ export interface Operation {
   rejectedBy?: OperationActor | null;
   rejectedAt?: string | null;
   rejectReason?: string | null;
+  rejectReasonKey?: string | null;
   rejectNotes?: string | null;
   isConditional?: boolean;
   conditionalNote?: string | null;
@@ -94,6 +131,15 @@ export interface Operation {
   correctiveRefId?: string | null;
   erpPosted?: boolean;
   erpBatchId?: string | null;
+  // ── Present only on GET /operations/{id} (single-detail response) ──────────
+  payload?: { channels?: unknown[] };
+  auditTrail?: AuditEvent[];
+  /** Sales-module single-op detail only (T04 §4); `null` until reconciled. */
+  reconciliation?: import("./company").SalesReconciliation | null;
+  /** Expenses-module single-op detail only (T05 §1). */
+  expenses?: import("./company").ExpensesBlock | null;
+  /** Purchases-module single-op detail only (T06 §2). */
+  purchases?: import("./company").PurchasesBlock | null;
 }
 
 export interface AuditEvent {

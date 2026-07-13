@@ -6,7 +6,8 @@ import {
 import { toast } from "sonner";
 import { api, downloadBlob } from "../client";
 import type {
-  InventoryBranchRow,
+  InventoryBranchesResponse,
+  InventoryCatalogItem,
   InventoryCatalogResponse,
   InventoryItemDef,
   InventoryItemRow,
@@ -14,16 +15,70 @@ import type {
 import { getErrorMessage } from "../errors";
 import { queryKeys, type InventoryBranchesFilter } from "./keys";
 
+// ─── Inventory review (T07 §1) — { branches[], summary } envelope ─────────────
 export function useInventoryBranches(filter: InventoryBranchesFilter = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(filter).filter(([, v]) => v !== undefined && v !== "" && v !== "all"),
+  );
   return useQuery({
     queryKey: queryKeys.inventoryBranches(filter),
     queryFn: async () => {
-      const res = await api.get<InventoryBranchRow[]>(
+      const res = await api.get<InventoryBranchesResponse>(
         "/company/me/inventory/branches",
-        { params: filter },
+        { params: clean },
       );
       return res.data;
     },
+  });
+}
+
+// ─── Item catalog search for daily-list config (T07 §8) ──────────────────────
+export function useInventoryItemsSearch(params: {
+  search?: string;
+  category?: string;
+  brandId?: string;
+} = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(params).filter(([, v]) => v !== undefined && v !== ""),
+  );
+  return useQuery({
+    queryKey: ["inventory", "items", clean] as const,
+    queryFn: async () => {
+      const res = await api.get<
+        { data: InventoryCatalogItem[] } | InventoryCatalogItem[]
+      >("/company/me/inventory/items", { params: clean });
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+    staleTime: 60_000,
+  });
+}
+
+// ─── Daily-list config + instant push (T07 §8) ───────────────────────────────
+// Replaces the branch's count list with catalog ids, then pushes realtime +
+// durable notification to the branch manager. `pushedAt` reflects a real push.
+export function useConfigureInventoryList() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      branchId,
+      items,
+    }: {
+      branchId: string;
+      items: string[];
+    }) => {
+      const res = await api.put<{ items: string[]; pushedAt?: string | null }>(
+        `/company/me/branches/${branchId}/inventory-list`,
+        { items },
+      );
+      return res.data;
+    },
+    onSuccess: (data, vars) => {
+      qc.invalidateQueries({ queryKey: queryKeys.dailyInventoryList(vars.branchId) });
+      qc.invalidateQueries({ queryKey: ["inventory", "branches"] });
+      toast.success(data.pushedAt ? "تم الحفظ وإشعار الفرع فوراً" : "تم حفظ قائمة الجرد");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }
 
@@ -90,19 +145,22 @@ export function useFlagInventoryBranch() {
   });
 }
 
+// T07 §9 — canonical body is `itemIndices` (0-based positions in the branch's list).
 export function useFlagInventoryItems() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({
       branchId,
-      itemIds,
+      itemIndices,
+      note,
     }: {
       branchId: string;
-      itemIds: string[];
+      itemIndices: number[];
+      note?: string;
     }) => {
       await api.post(
         `/company/me/inventory/branches/${branchId}/flag-items`,
-        { itemIds },
+        { itemIndices, note },
       );
     },
     onSuccess: (_d, vars) => {
@@ -203,8 +261,21 @@ export interface DailyReconciliationItem {
   itemId: string;
   itemName: string;
   unit?: string;
-  expectedQty: number;
-  actualQty: number;
+  // Equation terms (T07 §2). `null` when the branch didn't submit them.
+  opening: number | null;
+  received: number | null;
+  consumed: number | null;
+  waste: number | null;
+  transfers: number | null;
+  expectedClosing: number | null;
+  actualClosing: number | null;
+  /** `null` when equation terms weren't submitted (variance falls back to expectedQty). */
+  equationMatch: boolean | null;
+  minLevel: number | null;
+  stockStatus: { key: "critical" | "low" | "normal" | string; labelAr: string };
+  // Back-compat fallbacks still emitted alongside the equation.
+  expectedQty?: number;
+  actualQty?: number;
   varianceQty: number;
   variancePct: number;
   varianceValueHalalas: number;
@@ -243,7 +314,7 @@ export interface DailyVarianceAllocationPayload {
   date: string;
   items: Array<{
     itemId: string;
-    allocations: Array<{ employeeId: string; qty: number }>;
+    allocations: Array<{ employeeId?: string; empNumber?: string; qty: number }>;
   }>;
 }
 

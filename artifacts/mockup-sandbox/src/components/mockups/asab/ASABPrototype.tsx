@@ -156,9 +156,46 @@ import {
   useFinalApprove,
   useBulkApprove,
   useCreateERPBatch,
+  // T03/T04 — single-op detail, attachments, clarification, variance-assign, day/kpis
+  useOperation,
+  useOperationAttachments,
+  useRequestClarification,
+  useAssignSalesVariance,
+  usePatchSalesDetails,
+  useBranchEmployeesLookup,
+  useSalesKpis,
+  useSalesDayCompleteness,
+  // T05 — expenses & fixed assets (company-surface handlers, shared)
+  useExpensesKpis,
+  useVerifyExpenseInvoice,
+  useUnverifyExpenseInvoice,
+  useConvertToAssetDraft,
+  useAssetDrafts,
+  useConfirmAssetDraft,
+  useDiscardAssetDraft,
+  useAssets,
+  useCreateAsset,
+  usePatchAsset,
+  useImportAssets,
+  useAssetCategories,
+  // T06 — purchases (3-way match, company-surface handlers, shared)
+  usePurchasesList,
+  useSuppliers,
+  usePurchaseReturns,
+  // T07 — waste mutations + inventory export (company-surface handlers, shared)
+  useApproveWaste,
+  useRejectWaste,
+  useBulkApproveWaste,
+  usePatchWasteProduct,
+  usePutWasteAllocations,
+  useExportInventory,
+  // T08 — shifts (company-surface handlers, shared)
+  useCloseShift,
+  useExportShifts,
 } from "../../../api/queries";
 import { NotificationBell } from "../../shared/NotificationBell";
 import { GlobalSearch } from "../../shared/GlobalSearch";
+import { ClarifyModal } from "../../shared/ClarifyModal";
 
 import { SessionsList } from "../../shared/SessionsList";
 import { ChangePasswordModal } from "../../../auth/ChangePasswordModal";
@@ -200,6 +237,8 @@ interface Op {
   attachments: number;
   status: OpStatus;
   diff?: string;
+  // Sales matching breakdown (T04 §8) — null until reconciled
+  salesBreakdown?: { cashHalalas:number; cardHalalas:number; appsHalalas:number; totalSalesHalalas:number; collectedHalalas:number; varianceHalalas:number } | null;
   rejectReason?: string;
   // Corrective operation traceability
   isCorrection?: boolean;
@@ -1708,6 +1747,23 @@ function OpRow({ op, onView, onApprove, onReject }: {
           )}
           {isRejected && op.rejectReason && <span className="text-xs text-red-500 font-medium">{t("سبب:","Reason:")} {op.rejectReason}</span>}
         </div>
+        {/* Sales matching breakdown (T04 §8) — cash/card/apps + collected/variance */}
+        {op.moduleKey==="sales" && (
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap text-[11px]">
+            {op.salesBreakdown ? (<>
+              <span className="text-gray-500">💵 {t("نقدي","Cash")}: <span className="font-mono text-gray-700">{fmtAmt(Math.round(op.salesBreakdown.cashHalalas/100))}</span></span>
+              <span className="text-gray-500">🏦 {t("كارت","Card")}: <span className="font-mono text-gray-700">{fmtAmt(Math.round(op.salesBreakdown.cardHalalas/100))}</span></span>
+              <span className="text-gray-500">🛵 {t("تطبيقات","Apps")}: <span className="font-mono text-gray-700">{fmtAmt(Math.round(op.salesBreakdown.appsHalalas/100))}</span></span>
+              <span className="text-gray-300">·</span>
+              <span className="text-gray-500">{t("محصّل","Collected")}: <span className="font-mono text-gray-700">{fmtAmt(Math.round(op.salesBreakdown.collectedHalalas/100))}</span></span>
+              <span className={`font-mono font-bold ${op.salesBreakdown.varianceHalalas===0?"text-emerald-600":"text-red-600"}`}>
+                {op.salesBreakdown.varianceHalalas===0?"✓ 0":`${op.salesBreakdown.varianceHalalas>0?"+":""}${fmtAmt(Math.round(op.salesBreakdown.varianceHalalas/100))}`}
+              </span>
+            </>) : (
+              <span className="text-gray-300">{t("لم تتم التسوية بعد — «—»","Not reconciled — «—»")}</span>
+            )}
+          </div>
+        )}
       </div>
       <div className="font-extrabold text-gray-800 font-mono text-sm flex-shrink-0 tabular-nums">{fmtAmt(op.amount)} {t("ر.س","SAR")}</div>
       <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -1922,8 +1978,17 @@ function actorName(v: unknown): string | undefined {
 }
 
 function mapApiOpToOp(a: any): Op {
-  const matchMap: Record<string, MatchStatus> = { match: "exact", variance: "diff", unknown: "review" };
-  const originMap: Record<string, Op["origin"]> = { "branch-upload": "mobile", manual: "procurement", system: "system" };
+  // Backend (T03) now emits canonical enums directly (match: exact|review|diff,
+  // origin: mobile|procurement|system). Keep the legacy aliases mapped too for
+  // any not-yet-migrated rows.
+  const matchMap: Record<string, MatchStatus> = {
+    exact: "exact", review: "review", diff: "diff",
+    match: "exact", variance: "diff", unknown: "review",
+  };
+  const originMap: Record<string, Op["origin"]> = {
+    mobile: "mobile", procurement: "procurement", system: "system",
+    "branch-upload": "mobile", manual: "procurement",
+  };
   return {
     id: a.publicId ?? a.id ?? "",
     branch: a.branchName ?? a.branchId ?? "—",
@@ -1938,7 +2003,8 @@ function mapApiOpToOp(a: any): Op {
     brandName: a.brandName ?? undefined,
     branchId: a.branchId ?? undefined,
     match: matchMap[a.match] ?? "exact",
-    attachments: typeof a.attachments === "number" ? a.attachments : 0,
+    salesBreakdown: a.salesBreakdown ?? null,
+    attachments: typeof a.attachmentCount === "number" ? a.attachmentCount : (typeof a.attachments === "number" ? a.attachments : 0),
     status: a.status,
     diff: a.diff ?? undefined,
     rejectReason: a.rejectReason ?? undefined,
@@ -3173,34 +3239,24 @@ function AccModulePage({ moduleKey, title, navigate, setModal, setDetailId, ops,
 function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectOp, bulkApprove }:PageProps) {
   const { t, dir, lang } = useLang();
   const en = lang === "en";
-  const { data: salesApi } = useAccountantOperationsPlatform({ moduleKey: "sales" });
   const exportOpsMut = useExportOperations();
   const [filters,      setFilters]      = useState<Filters>({branch:"",status:"",match:"",search:""});
   const [brand,        setBrand]        = useState("");
   const [selectedDay,  setSelectedDay]  = useState("all");
 
-  const FALLBACK_DAY_OPTIONS = [
-    { label:t("الكل","All"),              val:"all",      ops:8, done:5 },
-    { label:t("اليوم","Today"),           val:"today",    ops:3, done:1 },
-    { label:t("أمس (14 أكت)","Yesterday (Oct 14)"), val:"d14", ops:4, done:4 },
-    { label:t("13 أكت (الإثنين)","Oct 13 (Mon)"),   val:"d13", ops:2, done:2 },
-    { label:t("12 أكت (الأحد)","Oct 12 (Sun)"),     val:"d12", ops:3, done:1 },
-    { label:t("11 أكت (السبت)","Oct 11 (Sat)"),     val:"d11", ops:1, done:0 },
-    { label:t("10 أكت (الجمعة)","Oct 10 (Fri)"),    val:"d10", ops:2, done:2 },
-    { label:t("الأسبوع الماضي","Last Week"),          val:"lastWeek",  ops:14, done:12 },
-    { label:t("الشهر الماضي","Last Month"),           val:"lastMonth", ops:48, done:40 },
-  ];
-  const apiDayOptions = (salesApi as any)?.dayOptions;
-  const DAY_OPTIONS = (apiDayOptions?.length > 0 ? apiDayOptions : FALLBACK_DAY_OPTIONS) as any[];
+  // Live day-completeness pills (T04 §3) + sales KPIs (T04 §2).
+  const { data: dayRows = [] } = useSalesDayCompleteness(7);
+  const salesDate = selectedDay !== "all" ? selectedDay : undefined;
+  const { data: kpis } = useSalesKpis(salesDate);
+  const selectedDayInfo = dayRows.find(d=>d.date===selectedDay);
 
   const mOps    = ops.filter(o=>o.moduleKey==="sales");
   const pending  = mOps.filter(o=>o.status==="pending");
-  const filtered = applyFilters(ops, filters, "sales");
-  const selectedDayInfo = DAY_OPTIONS.find((d:any)=>d.val===selectedDay);
+  const filtered = applyFilters(ops, filters, "sales")
+    .filter(o=>!salesDate || (o.operationDate ?? "").slice(0,10)===salesDate);
 
   const FALLBACK_BRAND_OPTIONS = [t("الكل","All")];
-  const apiBrandOptions = (salesApi as any)?.brandOptions;
-  const BRAND_OPTIONS = (apiBrandOptions?.length > 0 ? apiBrandOptions : FALLBACK_BRAND_OPTIONS) as any[];
+  const BRAND_OPTIONS = FALLBACK_BRAND_OPTIONS;
   const allBrandVal = t("الكل","All");
 
   return (
@@ -3219,6 +3275,32 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
         <KpiCard label={t("تمت الموافقة","Approved")} value={String(mOps.filter(o=>o.status==="approved"||o.status==="final-approved").length)} sub={t("موافق + معتمد نهائياً","Approved + Final-approved")} icon={<CheckCircle2 size={18} className="text-sky-600"/>} accent="blue"/>
         <KpiCard label={t("مرفوضة","Rejected")} value={String(mOps.filter(o=>o.status==="rejected").length)} sub={t("تحتاج إعادة رفع","Needs re-upload")} icon={<XCircle size={18} className="text-red-600"/>} accent="red"/>
       </div>
+
+      {/* Sales financial KPIs (T04 §2) — GET /company/me/sales/kpis */}
+      {kpis && (
+        <div className="grid grid-cols-4 gap-4">
+          <KpiCard label={t("إجمالي المبيعات","Total Sales")}   value={fmtAmt(Math.round(kpis.totalSalesHalalas/100))}     sub={`${kpis.branchCount} ${t("فرع","branches")}`} icon={<TrendingUp size={18} className="text-purple-600"/>} accent="purple"/>
+          <KpiCard label={t("إجمالي التحصيل","Total Collected")} value={fmtAmt(Math.round(kpis.totalCollectedHalalas/100))}  sub={kpis.trendPct==null?t("لا مقارنة","—"):`${kpis.trendPct>0?"▲":"▼"} ${Math.abs(kpis.trendPct)}%`} icon={<CheckCircle2 size={18} className="text-sky-600"/>} accent="blue"/>
+          <KpiCard label={t("الفرق","Variance")}                value={fmtAmt(Math.round(kpis.totalVarianceHalalas/100))}   sub={`${kpis.varianceCaseCount} ${t("حالة فرق","variance cases")}`} icon={<AlertTriangle size={18} className="text-red-600"/>} accent={kpis.totalVarianceHalalas===0?"emerald":"red"}/>
+          <KpiCard label={t("فروع بلا فرق","Zero-Variance")}    value={String(kpis.zeroVarianceBranchCount)} sub={t("تحصيل مطابق","Collection matches")} icon={<Lock size={18} className="text-emerald-600"/>} accent="emerald"/>
+        </div>
+      )}
+
+      {kpis && kpis.varianceBranches.length>0 && (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4" dir={dir}>
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={15} className="text-red-600"/>
+            <p className="text-sm font-bold text-red-800">{t("تنبيه: توجد فروق في التحصيل","Alert: collection variances detected")}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {kpis.varianceBranches.map(vb=>(
+              <span key={vb.branchId} className="text-[11px] bg-white border border-red-200 text-red-700 px-2 py-1 rounded-lg font-semibold">
+                {vb.name}: <span className="font-mono">{fmtAmt(Math.round(vb.varianceHalalas/100))} {t("ر.س","SAR")}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir={dir}>
         <div className="grid grid-cols-4 gap-3">
@@ -3247,7 +3329,8 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
           <div>
             <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التاريخ / الفترة","Date / Period")}</label>
             <select value={selectedDay} onChange={e=>setSelectedDay(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {DAY_OPTIONS.map(d=><option key={d.val} value={d.val}>{d.label}</option>)}
+              <option value="all">{t("الكل","All")}</option>
+              {dayRows.map(d=><option key={d.date} value={d.date}>{d.pillLabelAr} ({d.completedCount}/{d.requiredCount})</option>)}
             </select>
           </div>
         </div>
@@ -3269,18 +3352,22 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
       </div>
 
       {selectedDay!=="all" && selectedDayInfo && (
-        <div className={`rounded-xl border p-4 flex items-center gap-4 ${selectedDayInfo.ops>selectedDayInfo.done?"bg-amber-50 border-amber-200":"bg-emerald-50 border-emerald-200"}`} dir={dir}>
+        <div className={`rounded-xl border p-4 flex items-center gap-4 ${selectedDayInfo.missingCount>0?"bg-amber-50 border-amber-200":"bg-emerald-50 border-emerald-200"}`} dir={dir}>
           <div className="flex-1">
-            <p className="text-sm font-bold text-gray-800">{selectedDayInfo.label}</p>
-            <p className="text-xs text-gray-500 mt-0.5">
-              {selectedDayInfo.ops} {t("عملية مطلوبة","required operations")} — {selectedDayInfo.done} {t("مكتملة","completed")}
-              {selectedDayInfo.ops>selectedDayInfo.done && <span className="text-amber-700 font-semibold"> · {selectedDayInfo.ops-selectedDayInfo.done} {t("ناقصة","missing")}</span>}
-            </p>
+            <p className="text-sm font-bold text-gray-800">{selectedDayInfo.pillLabelAr}</p>
+            <p className="text-xs text-gray-500 mt-0.5">{selectedDayInfo.bannerAr}</p>
+            {selectedDayInfo.missingBranches.length>0 && (
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {selectedDayInfo.missingBranches.map(b=>(
+                  <span key={b.branchId} className="text-[10px] bg-white border border-amber-200 text-amber-700 px-2 py-0.5 rounded-lg">{b.name}</span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-6 text-center">
-            <div><p className="text-lg font-black text-gray-800">{selectedDayInfo.ops}</p><p className="text-[10px] text-gray-500">{t("إجمالي","Total")}</p></div>
-            <div><p className="text-lg font-black text-emerald-600">{selectedDayInfo.done}</p><p className="text-[10px] text-gray-500">{t("مكتملة","Done")}</p></div>
-            <div><p className={`text-lg font-black ${selectedDayInfo.ops-selectedDayInfo.done>0?"text-amber-600":"text-gray-300"}`}>{selectedDayInfo.ops-selectedDayInfo.done}</p><p className="text-[10px] text-gray-500">{t("ناقص","Missing")}</p></div>
+            <div><p className="text-lg font-black text-gray-800">{selectedDayInfo.requiredCount}</p><p className="text-[10px] text-gray-500">{t("مطلوبة","Required")}</p></div>
+            <div><p className="text-lg font-black text-emerald-600">{selectedDayInfo.completedCount}</p><p className="text-[10px] text-gray-500">{t("مكتملة","Done")}</p></div>
+            <div><p className={`text-lg font-black ${selectedDayInfo.missingCount>0?"text-amber-600":"text-gray-300"}`}>{selectedDayInfo.missingCount}</p><p className="text-[10px] text-gray-500">{t("ناقص","Missing")}</p></div>
           </div>
         </div>
       )}
@@ -3312,13 +3399,57 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
 // ─────────────────────────────────────────────
 // ASSET DRAFT PROVIDER
 // ─────────────────────────────────────────────
-function AssetDraftProvider({ children }: { children: ReactNode }) {
-  const [drafts, setDrafts] = useState<AssetDraft[]>([]);
-  const navRef = useRef<(()=>void)|undefined>(undefined);
+// Category key ↔ ASAB label maps (backend uses keys; ASAB UI uses Arabic labels).
+const ASSET_CAT_KEY_TO_LABEL: Record<string, AssetCatType> = {
+  kitchen: "معدات", tech: "تقنية", furniture: "أثاث", vehicles: "مركبات", construction: "أخرى", other: "أخرى",
+};
+const ASSET_CAT_LABEL_TO_KEY: Record<string, string> = {
+  "معدات": "kitchen", "تقنية": "tech", "أثاث": "furniture", "مركبات": "vehicles", "أخرى": "other",
+};
 
-  const addDraft     = (d: AssetDraft) => setDrafts(p=>[...p.filter(x=>x.draftId!==d.draftId), d]);
-  const discardDraft = (id: string)    => setDrafts(p=>p.filter(x=>x.draftId!==id));
-  const confirmDraft = (id: string)    => setDrafts(p=>p.map(x=>x.draftId===id?{...x,status:"confirmed" as const}:x));
+function AssetDraftProvider({ children }: { children: ReactNode }) {
+  const navRef = useRef<(()=>void)|undefined>(undefined);
+  // Server-backed drafts (T05 §7/§8): GET /company/me/asset-drafts + convert/confirm/discard.
+  const { data: serverDrafts = [] } = useAssetDrafts();
+  const convertMut = useConvertToAssetDraft();
+  const confirmMut = useConfirmAssetDraft();
+  const discardMut = useDiscardAssetDraft();
+
+  const drafts: AssetDraft[] = serverDrafts.map((d): AssetDraft => ({
+    draftId: d.draftId,
+    expenseOpId: d.expenseOpId,
+    invNum: d.invNum,
+    vendor: d.vendor,
+    desc: d.desc,
+    amount: d.amountHalalas / 100,
+    expenseBranch: d.expenseBranch,
+    expenseDate: d.expenseDate,
+    assetName: d.assetName,
+    cat: ASSET_CAT_KEY_TO_LABEL[d.category] ?? "أخرى",
+    usefulLife: d.usefulLifeMonths,
+    targetBranches: d.targetBranches,
+    custodian: d.custodian,
+    qty: d.qty,
+    notes: "",
+    convertedAt: d.createdAt,
+    status: d.status,
+  }));
+
+  const addDraft = (d: AssetDraft) => {
+    convertMut.mutate({
+      invoiceId: d.expenseOpId,
+      invoiceIndex: 0,
+      assetName: d.assetName,
+      category: ASSET_CAT_LABEL_TO_KEY[d.cat] ?? "other",
+      usefulLifeMonths: d.usefulLife,
+      targetBranches: d.targetBranches,
+      custodian: d.custodian,
+      qty: d.qty,
+      notes: d.notes || undefined,
+    });
+  };
+  const discardDraft = (id: string) => { discardMut.mutate(id); };
+  const confirmDraft = (id: string) => { confirmMut.mutate(id); };
   const getConvertedInvNums = () => new Set(drafts.filter(d=>d.status==="draft"||d.status==="confirmed").map(d=>d.invNum));
   const setNavigateToAssets = (fn: ()=>void) => { navRef.current = fn; };
 
@@ -3598,7 +3729,10 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
   const { t, dir, lang } = useLang();
   const en = lang === "en";
   const { data: expensesApi } = useAccountantOperationsPlatform({ moduleKey: "expenses" });
+  const { data: expKpis } = useExpensesKpis();
   const exportOpsMut = useExportOperations();
+  const verifyMut = useVerifyExpenseInvoice();
+  const unverifyMut = useUnverifyExpenseInvoice();
   const { getConvertedInvNums, drafts } = useContext(AssetDraftContext);
   const [filters,          setFilters]          = useState<Filters>({branch:"",status:"",match:"",search:""});
   const [expandedId,       setExpandedId]       = useState<string|null>(null);
@@ -3660,6 +3794,16 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
         <KpiCard label={t("تمت الموافقة","Approved")} value={String(mOps.filter(o=>o.status==="approved"||o.status==="final-approved").length)} sub={t("موافق + معتمد نهائياً","Approved + Final-approved")} icon={<CheckCircle2 size={18} className="text-sky-600"/>} accent="blue"/>
         <KpiCard label={t("مرفوضة","Rejected")} value={String(mOps.filter(o=>o.status==="rejected").length)} sub={t("تحتاج إعادة رفع","Needs re-upload")} icon={<XCircle size={18} className="text-red-600"/>} accent="red"/>
       </div>
+
+      {/* Expenses invoice-match KPIs (T05 §2) — GET /company/me/expenses/kpis */}
+      {expKpis && (
+        <div className="grid grid-cols-4 gap-4">
+          <KpiCard label={t("إجمالي المصروفات","Total Expenses")} value={fmtAmt(Math.round(expKpis.totalHalalas/100))} sub={`${t("ضريبة","VAT")} ${fmtAmt(Math.round(expKpis.vat15Halalas/100))}`} icon={<FileText size={18} className="text-purple-600"/>} accent="purple"/>
+          <KpiCard label={t("فواتير مطابقة","Matched")}   value={String(expKpis.pendingInvoices.matched)}  sub={t("قيد المراجعة","under review")} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
+          <KpiCard label={t("غير مطابقة","Mismatch")}      value={String(expKpis.pendingInvoices.mismatch)} sub={t("تحتاج تدقيق","needs audit")} icon={<AlertTriangle size={18} className="text-amber-600"/>} accent="amber"/>
+          <KpiCard label={t("مفقودة","Missing")}           value={String(expKpis.pendingInvoices.missing)}  sub={t("بلا مستند","no document")} icon={<XCircle size={18} className="text-red-600"/>} accent="red"/>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir={dir}>
         <div className="grid grid-cols-4 gap-3">
@@ -3851,7 +3995,7 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
                                   </button>
                                 </td>
                                 <td className="px-3 py-2 text-center">
-                                  <button onClick={()=>toggleInvoiceVerify(vKey)}
+                                  <button onClick={()=>{ toggleInvoiceVerify(vKey); (isInvVerified?unverifyMut:verifyMut).mutate({ invoiceId: op.id, invoiceIndex: k }); }}
                                     title={isInvVerified ? t("موثّق","Verified") : t("اضغط للتوثيق","Click to verify")}
                                     className={`w-7 h-7 rounded-full flex items-center justify-center mx-auto transition-all ${isInvVerified?"bg-emerald-500 text-white":"border-2 border-dashed border-gray-300 text-gray-300 hover:border-emerald-400 hover:text-emerald-400"}`}>
                                     <CheckSquare size={12}/>
@@ -3986,38 +4130,117 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
   );
 }
 
+// One variance-allocation row — owns its own employee-name lookup by empNumber.
+function AccVarEmpRow({ branchId, row, onField, onRemove, onQuickFill, canRemove, t }:{
+  branchId?:string; row:{ empId:string; amount:string };
+  onField:(field:"empId"|"amount",val:string)=>void; onRemove:()=>void; onQuickFill:()=>void;
+  canRemove:boolean; t:(ar:string,en:string)=>string;
+}) {
+  const { data: emp } = useBranchEmployeesLookup(branchId, row.empId.length>=3 ? row.empId : undefined);
+  const empName = emp?.name ?? "";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-0.5">
+        <label className="text-[10px] text-gray-400">{t("رقم الموظف","Employee ID")}</label>
+        <input placeholder={t("مثال: 1001","e.g. 1001")} value={row.empId}
+          onChange={ev=>onField("empId",ev.target.value)}
+          className="w-24 text-center font-mono border border-red-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:border-red-400"/>
+      </div>
+      <div className="flex flex-col gap-0.5 flex-1">
+        <label className="text-[10px] text-gray-400">{t("اسم الموظف","Employee Name")}</label>
+        <div className="h-8 flex items-center px-2 rounded-lg bg-white border border-gray-100 text-xs text-gray-700 font-medium">
+          {empName || <span className="text-gray-300">{t("يُعبأ تلقائياً","Auto-filled")}</span>}
+        </div>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <label className="text-[10px] text-gray-400">{t("المبلغ (ر.س)","Amount (SAR)")}</label>
+        <input placeholder="0.00" type="number" value={row.amount}
+          onChange={ev=>onField("amount",ev.target.value)}
+          className="w-28 text-center font-mono border border-red-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:border-red-400"/>
+      </div>
+      <div className="flex flex-col gap-0.5">
+        <label className="text-[10px] text-gray-400 opacity-0">⚡</label>
+        <button title={t("تعبئة المتبقي تلقائياً","Auto-fill remaining")} onClick={onQuickFill}
+          className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[11px] font-bold hover:bg-amber-200 border border-amber-200">
+          ⚡ {t("المتبقي","Remaining")}
+        </button>
+      </div>
+      {canRemove && (
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[10px] text-gray-400 opacity-0">×</label>
+          <button onClick={onRemove} className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><X size={13}/></button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approveOp, addCorrectiveOp }:PageProps) {
   const { t, lang, dir } = useLang();
   const en = lang === "en";
-  const { data: detailApi } = useAccountantOperationsPlatform();
   const op = ops.find(o=>o.id===detailId) || ops[0];
 
-  // Reconciliation employee lookup comes from the platform API; empty until returned.
-  const apiReconEmp = (detailApi as any)?.reconEmployees;
-  const RECON_EMP: Record<string,string> = (apiReconEmp && Object.keys(apiReconEmp).length > 0 ? apiReconEmp : {}) as any;
+  // Real reconciliation rides on GET /operations/{id} (T04 §4). `detailId` accepts
+  // uuid or publicId; the row's `id` is the publicId, so fetch by op.id.
+  const { data: detail } = useOperation(op?.id);
+  const recon = detail?.reconciliation ?? null;
+  const assignMut = useAssignSalesVariance();
+  const patchMut = usePatchSalesDetails();
+  const clarifyMut = useRequestClarification();
+  const [clarifyOpen, setClarifyOpen] = useState(false);
 
   const totalSales = op?.amount || 0;
-  const [reconCash,      setReconCash]      = useState((detailApi as any)?.reconciliation?.cash ?? 0);
-  const [reconBank,      setReconBank]      = useState((detailApi as any)?.reconciliation?.bank ?? 0);
-  const [reconEditMode,  setReconEditMode]  = useState(false);
-  // Delivery-app reconciliation rows come from the platform API; empty until returned.
-  const apiDelivApps = (detailApi as any)?.reconciliation?.deliveryApps;
-  const [reconDelivApps, setReconDelivApps] = useState<any[]>([]);
-  useEffect(() => { if (Array.isArray(apiDelivApps)) setReconDelivApps(apiDelivApps); }, [apiDelivApps]);
-  type VEmp = { empId:string; empName:string; amount:string };
-  const [varEmps, setVarEmps] = useState<VEmp[]>([{ empId:"", empName:"", amount:"" }]);
-  const setVarEmpField = (i:number, field:keyof VEmp, val:string) =>
-    setVarEmps(p=>p.map((e,j)=>j===i ? {...e,[field]:val, ...(field==="empId"?{empName:RECON_EMP[val]||""}:{}) } : e));
+  const channels = recon?.channels ?? [];
+  const coreCh = channels.filter(c=>c.group==="core");
+  const deliveryCh = channels.filter(c=>c.group==="delivery");
 
-  const totalDelivery   = reconDelivApps.reduce((s,d)=>s+d.val, 0);
-  const totalCollection = reconCash + reconBank + totalDelivery;
-  const variance        = totalSales - totalCollection;
+  const [reconEditMode, setReconEditMode] = useState(false);
+  // Per-channel edited actual amounts (SAR strings), keyed by channel key.
+  const [draft, setDraft] = useState<Record<string,string>>({});
+  const [reconVarReason, setReconVarReason] = useState("");
+
+  function beginEdit() {
+    const seed:Record<string,string> = {};
+    channels.forEach(c=>{ seed[c.key] = String(Math.round(c.actualAmountHalalas)/100); });
+    setDraft(seed);
+    setReconVarReason(recon?.varianceReason ?? "");
+    setReconEditMode(true);
+  }
+  function saveEdit() {
+    if (!op) return;
+    const payloadChannels = channels.map(c=>({
+      key: c.key,
+      actualAmountHalalas: Math.round((parseFloat(draft[c.key] ?? String(c.actualAmountHalalas/100))||0)*100),
+      posAmountHalalas: c.posAmountHalalas,
+    }));
+    patchMut.mutate(
+      { operationId: op.id, payload: { channels: payloadChannels, varianceReason: reconVarReason || undefined } },
+      { onSuccess: ()=>setReconEditMode(false) },
+    );
+  }
+
+  type VEmp = { empId:string; amount:string };
+  const [varEmps, setVarEmps] = useState<VEmp[]>([{ empId:"", amount:"" }]);
+  const setVarEmpField = (i:number, field:keyof VEmp, val:string) =>
+    setVarEmps(p=>p.map((e,j)=>j===i ? {...e,[field]:val} : e));
+
+  const totalCollection = recon ? Math.round(recon.totals.totalCollectionHalalas/100) : 0;
+  // Prefer the server-computed variance when reconciliation is present.
+  const variance        = recon ? Math.round(recon.totals.varianceHalalas/100) : 0;
   const hasVariance     = variance !== 0;
   const assignedTotal   = varEmps.reduce((s,e)=>s+(parseFloat(e.amount)||0), 0);
-  const remaining       = variance - assignedTotal;
+  const remaining       = Math.abs(variance) - assignedTotal;
 
-  const isLocked = op?.status === "final-approved";
-  const [reconVarReason, setReconVarReason] = useState("");
+  const isLocked = (recon?.isLocked ?? false) || op?.status === "final-approved";
+
+  function confirmVarianceAssign() {
+    if (!op) return;
+    const allocations = varEmps
+      .filter(e=>e.empId.trim() && (parseFloat(e.amount)||0)>0)
+      .map(e=>({ empNumber: e.empId.trim(), amountHalalas: Math.round((parseFloat(e.amount)||0)*100) }));
+    if (allocations.length===0) return;
+    assignMut.mutate({ operationId: op.id, payload: { allocations, notes: reconVarReason || undefined } });
+  }
 
   return (
     <div className="space-y-4">
@@ -4085,15 +4308,20 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2 space-y-4">
           <Card title={t("تسوية المبيعات","Sales Reconciliation")} actions={
-            !isLocked && (
-              <button onClick={()=>setReconEditMode(m=>!m)}
+            !isLocked && recon && (
+              <button onClick={()=> reconEditMode ? saveEdit() : beginEdit()} disabled={patchMut.isPending}
                 className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-all ${reconEditMode?"bg-purple-600 text-white border-purple-600":"bg-white text-purple-600 border-purple-200 hover:bg-purple-50"}`}>
-                <Edit3 size={11}/> {reconEditMode ? t("💾 حفظ التعديلات","💾 Save Changes") : t("تعديل الأرقام","Edit Figures")}
+                <Edit3 size={11}/> {reconEditMode ? (patchMut.isPending?t("جارٍ الحفظ…","Saving…"):t("💾 حفظ التعديلات","💾 Save Changes")) : t("تعديل الأرقام","Edit Figures")}
               </button>
             )
           }>
             <div className="divide-y divide-gray-100" dir={dir}>
 
+              {!recon && (
+                <p className="text-sm text-gray-400 text-center py-6">{t("لم تتم التسوية بعد لهذه العملية","This operation has not been reconciled yet")}</p>
+              )}
+
+              {recon && <>
               {/* ── إجمالي المبيعات (مقفل — من رفع مدير الفرع) ── */}
               <div className="flex items-center justify-between px-4 py-3.5 bg-indigo-50/60">
                 <div className="flex items-center gap-2">
@@ -4101,66 +4329,51 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
                   <span className="text-sm font-bold text-indigo-900">{t("إجمالي المبيعات","Total Sales")}</span>
                   <span className="text-[10px] bg-indigo-100 text-indigo-500 px-1.5 py-0.5 rounded-md">{t("(من رفع مدير الفرع — مقفل)","(Branch Manager entry — locked)")}</span>
                 </div>
-                <span className="font-mono font-black text-indigo-800 text-base">{fmtAmt(totalSales)} {t("ر.س","SAR")}</span>
+                <span className="font-mono font-black text-indigo-800 text-base">{fmtAmt(Math.round(recon.totals.expectedTotalHalalas/100))} {t("ر.س","SAR")}</span>
               </div>
 
-              {/* Cash */}
-              <div className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/60">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">💵</span>
-                  <span className="text-sm text-gray-700 font-medium">{t("نقدي (صندوق)","Cash (Till)")}</span>
+              {/* ── Core channels ── */}
+              {coreCh.map(c=>(
+                <div key={c.key} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50/60 ${c.status==="diff"?"bg-amber-50/40":""}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{c.icon}</span>
+                    <span className="text-sm text-gray-700 font-medium">{c.labelAr}</span>
+                    {c.diffHalalas!==0 && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-md font-bold">{c.statusLabelAr} {c.diffHalalas>0?"+":""}{fmtAmt(Math.round(c.diffHalalas/100))}</span>}
+                  </div>
+                  {reconEditMode && !isLocked ? (
+                    <input type="number" value={draft[c.key] ?? String(c.actualAmountHalalas/100)}
+                      onChange={e=>setDraft(d=>({...d,[c.key]:e.target.value}))}
+                      className="w-36 text-center font-mono font-semibold border-2 border-purple-300 rounded-xl px-3 py-1.5 text-sm bg-purple-50 focus:outline-none focus:border-purple-500"/>
+                  ) : (
+                    <span className="font-mono font-semibold text-gray-800 text-sm">{fmtAmt(Math.round(c.actualAmountHalalas/100))} {t("ر.س","SAR")}</span>
+                  )}
                 </div>
-                {reconEditMode && !isLocked ? (
-                  <input type="number" value={reconCash}
-                    onChange={e=>setReconCash(+e.target.value)}
-                    className="w-36 text-center font-mono font-semibold border-2 border-purple-300 rounded-xl px-3 py-1.5 text-sm bg-purple-50 focus:outline-none focus:border-purple-500"/>
-                ) : (
-                  <span className="font-mono font-semibold text-gray-800 text-sm">{fmtAmt(reconCash)} {t("ر.س","SAR")}</span>
-                )}
-              </div>
-
-              {/* Bank */}
-              <div className="flex items-center justify-between px-4 py-3 hover:bg-gray-50/60">
-                <div className="flex items-center gap-2">
-                  <span className="text-base">🏦</span>
-                  <span className="text-sm text-gray-700 font-medium">{t("بنك / كارت (بنك الرياض)","Bank / Card (Riyadh Bank)")}</span>
-                </div>
-                {reconEditMode && !isLocked ? (
-                  <input type="number" value={reconBank}
-                    onChange={e=>setReconBank(+e.target.value)}
-                    className="w-36 text-center font-mono font-semibold border-2 border-purple-300 rounded-xl px-3 py-1.5 text-sm bg-purple-50 focus:outline-none focus:border-purple-500"/>
-                ) : (
-                  <span className="font-mono font-semibold text-gray-800 text-sm">{fmtAmt(reconBank)} {t("ر.س","SAR")}</span>
-                )}
-              </div>
+              ))}
 
               {/* Delivery apps header */}
-              <div className="px-4 py-2 bg-gray-50/80">
-                <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">{t("تطبيقات التوصيل","Delivery Apps")}</p>
-              </div>
+              {deliveryCh.length>0 && (
+                <div className="px-4 py-2 bg-gray-50/80">
+                  <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wide">{t("تطبيقات التوصيل","Delivery Apps")}</p>
+                </div>
+              )}
 
-              {/* ── كل تطبيق ── */}
-              {reconDelivApps.map((d,i)=>{
-                const appDiff = d.orig - d.val;
-                return (
-                  <div key={i} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50/60 transition-colors ${appDiff>0?"bg-amber-50/40":""}`}>
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{d.icon}</span>
-                      <span className="text-sm text-gray-700 font-medium">{d.app}</span>
-                      {appDiff > 0 && (
-                        <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-md font-bold">{t("تعديل","Adj")} −{fmtAmt(appDiff)} {t("ر.س","SAR")}</span>
-                      )}
-                    </div>
-                    {reconEditMode && !isLocked ? (
-                      <input type="number" value={d.val}
-                        onChange={e=>setReconDelivApps(apps=>apps.map((a,j)=>j===i?{...a,val:+e.target.value}:a))}
-                        className="w-36 text-center font-mono font-semibold border-2 border-purple-300 rounded-xl px-3 py-1.5 text-sm bg-purple-50 focus:outline-none focus:border-purple-500"/>
-                    ) : (
-                      <span className={`font-mono font-semibold text-sm ${appDiff>0?"text-amber-700":"text-gray-800"}`}>{fmtAmt(d.val)} {t("ر.س","SAR")}</span>
-                    )}
+              {/* ── Delivery channels ── */}
+              {deliveryCh.map(c=>(
+                <div key={c.key} className={`flex items-center justify-between px-4 py-3 hover:bg-gray-50/60 transition-colors ${c.status==="diff"?"bg-amber-50/40":""}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="text-base">{c.icon}</span>
+                    <span className="text-sm text-gray-700 font-medium">{c.labelAr}</span>
+                    {c.diffHalalas!==0 && <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-md font-bold">{c.statusLabelAr} {c.diffHalalas>0?"+":""}{fmtAmt(Math.round(c.diffHalalas/100))}</span>}
                   </div>
-                );
-              })}
+                  {reconEditMode && !isLocked ? (
+                    <input type="number" value={draft[c.key] ?? String(c.actualAmountHalalas/100)}
+                      onChange={e=>setDraft(d=>({...d,[c.key]:e.target.value}))}
+                      className="w-36 text-center font-mono font-semibold border-2 border-purple-300 rounded-xl px-3 py-1.5 text-sm bg-purple-50 focus:outline-none focus:border-purple-500"/>
+                  ) : (
+                    <span className={`font-mono font-semibold text-sm ${c.status==="diff"?"text-amber-700":"text-gray-800"}`}>{fmtAmt(Math.round(c.actualAmountHalalas/100))} {t("ر.س","SAR")}</span>
+                  )}
+                </div>
+              ))}
 
               {/* ── قسم توزيع الفرق على الموظفين (يظهر فقط عند وجود فرق) ── */}
               {hasVariance && !isLocked && (
@@ -4192,54 +4405,19 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
                       {reconVarReason && <p className="text-[10px] text-red-500 mt-1">✓ {t("سبب مُسجَّل:","Recorded reason:")} {reconVarReason}</p>}
                     </div>
                     {varEmps.map((e,i)=>(
-                      <div key={i} className="flex items-center gap-2">
-                        <div className="flex flex-col gap-0.5">
-                          <label className="text-[10px] text-gray-400">{t("رقم الموظف","Employee ID")}</label>
-                          <input placeholder={t("مثال: 1001","e.g. 1001")} value={e.empId}
-                            onChange={ev=>setVarEmpField(i,"empId",ev.target.value)}
-                            className="w-24 text-center font-mono border border-red-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:border-red-400"/>
-                        </div>
-                        <div className="flex flex-col gap-0.5 flex-1">
-                          <label className="text-[10px] text-gray-400">{t("اسم الموظف","Employee Name")}</label>
-                          <div className="h-8 flex items-center px-2 rounded-lg bg-white border border-gray-100 text-xs text-gray-700 font-medium">
-                            {e.empName || <span className="text-gray-300">{t("يُعبأ تلقائياً","Auto-filled")}</span>}
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-0.5">
-                          <label className="text-[10px] text-gray-400">{t("المبلغ (ر.س)","Amount (SAR)")}</label>
-                          <input placeholder="0.00" type="number" value={e.amount}
-                            onChange={ev=>setVarEmpField(i,"amount",ev.target.value)}
-                            className="w-28 text-center font-mono border border-red-200 rounded-lg px-2 py-1.5 text-xs bg-white focus:outline-none focus:border-red-400"/>
-                        </div>
-                        <div className="flex flex-col gap-0.5">
-                          <label className="text-[10px] text-gray-400 opacity-0">⚡</label>
-                          <button title={t("تعبئة المتبقي تلقائياً","Auto-fill remaining")}
-                            onClick={()=>setVarEmpField(i,"amount",String(Math.max(0, remaining+(parseFloat(e.amount)||0))))}
-                            className="px-2 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-[11px] font-bold hover:bg-amber-200 border border-amber-200">
-                            ⚡ {t("المتبقي","Remaining")}
-                          </button>
-                        </div>
-                        {varEmps.length > 1 && (
-                          <div className="flex flex-col gap-0.5">
-                            <label className="text-[10px] text-gray-400 opacity-0">×</label>
-                            <button onClick={()=>setVarEmps(p=>p.filter((_,j)=>j!==i))}
-                              className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg">
-                              <X size={13}/>
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <AccVarEmpRow key={i} branchId={op?.branchId} row={e} canRemove={varEmps.length>1} t={t}
+                        onField={(f,v)=>setVarEmpField(i,f,v)}
+                        onRemove={()=>setVarEmps(p=>p.filter((_,j)=>j!==i))}
+                        onQuickFill={()=>setVarEmpField(i,"amount",String(Math.max(0, remaining+(parseFloat(e.amount)||0))))}/>
                     ))}
                     <div className="flex items-center justify-between pt-1">
-                      <button onClick={()=>setVarEmps(p=>[...p,{empId:"",empName:"",amount:""}])}
+                      <button onClick={()=>setVarEmps(p=>[...p,{empId:"",amount:""}])}
                         className="flex items-center gap-1 text-xs text-red-600 hover:underline font-semibold">
                         <Plus size={11}/> {t("إضافة موظف آخر","Add Another Employee")}
                       </button>
-                      {remaining <= 0 && (
-                        <Btn size="sm" variant="success">
-                          <CheckCircle2 size={11}/> {t("تأكيد التحميل","Confirm Assignment")}
-                        </Btn>
-                      )}
+                      <Btn size="sm" variant="success" onClick={confirmVarianceAssign} disabled={assignMut.isPending || remaining>0}>
+                        <CheckCircle2 size={11}/> {assignMut.isPending?t("جارٍ التحميل…","Uploading…"):t("تأكيد التحميل","Confirm Assignment")}
+                      </Btn>
                     </div>
                   </div>
                 </div>
@@ -4266,6 +4444,7 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
                   </span>
                 </div>
               )}
+              </>}
 
             </div>
           </Card>
@@ -4349,7 +4528,7 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
                 <button onClick={()=>{ setDetailId(op.id); setModal("reject"); }} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-red-50 text-red-700 font-semibold text-sm hover:bg-red-100 border border-red-200">
                   <XCircle size={15}/> {t("رفض — إعادة لمدير الفرع","Reject — Return to Branch Manager")}
                 </button>
-                <button className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-50 text-blue-700 font-semibold text-sm hover:bg-blue-100 border border-blue-200">
+                <button onClick={()=>setClarifyOpen(true)} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-50 text-blue-700 font-semibold text-sm hover:bg-blue-100 border border-blue-200">
                   <MessageSquare size={15}/> {t("طلب توضيح","Request Clarification")}
                 </button>
               </div>
@@ -4365,22 +4544,7 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
               </div>
             </Card>
           ) : null}
-          <Card title={t("المرفقات (3)","Attachments (3)")}>
-            <div className="p-4 space-y-2">
-              {[{name:"تقرير POS.pdf",type:"PDF",size:"245 KB"},{name:"كشف بنك الرياض.pdf",type:"PDF",size:"182 KB"},{name:"تقرير هنقرستيشن.xlsx",type:"Excel",size:"98 KB"}].map((att,i)=>(
-                <div key={i} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 border border-gray-100">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${att.type==="PDF"?"bg-red-100 text-red-700":"bg-green-100 text-green-700"}`}>{att.type}</span>
-                    <div><p className="text-xs font-medium text-gray-700">{att.name}</p><p className="text-[10px] text-gray-400">{att.size}</p></div>
-                  </div>
-                  <div className="flex gap-1">
-                    <button className="p-1.5 rounded hover:bg-gray-200"><Eye size={11} className="text-gray-500"/></button>
-                    <button className="p-1.5 rounded hover:bg-gray-200"><Download size={11} className="text-gray-500"/></button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
+          {op && <AccAttachmentsCard operationId={op.id} t={t}/>}
           {!isLocked && (
             <Card title={t("ملاحظات المحاسب","Accountant Notes")}>
               <div className="p-4">
@@ -4391,7 +4555,46 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
           )}
         </div>
       </div>
+
+      {op && (
+        <ClarifyModal
+          open={clarifyOpen}
+          subject={op.id}
+          onClose={()=>setClarifyOpen(false)}
+          onSubmit={({ message })=>{ clarifyMut.mutate({ id: op.id, message }); }}
+          t={t}
+        />
+      )}
     </div>
+  );
+}
+
+// Attachments card for the accountant sales detail — GET /operations/{id}/attachments.
+function AccAttachmentsCard({ operationId, t }:{ operationId:string; t:(ar:string,en:string)=>string }) {
+  const { data: files = [], isLoading } = useOperationAttachments(operationId);
+  const kindOf = (mime:string) => mime.includes("pdf") ? "PDF" : mime.includes("sheet")||mime.includes("excel")||mime.includes("csv") ? "Excel" : "File";
+  return (
+    <Card title={`${t("المرفقات","Attachments")} (${files.length})`}>
+      <div className="p-4 space-y-2">
+        {isLoading && <p className="text-xs text-gray-400 text-center py-2">{t("جارٍ التحميل…","Loading…")}</p>}
+        {!isLoading && files.length===0 && <p className="text-xs text-gray-400 text-center py-2">{t("لا توجد مرفقات","No attachments")}</p>}
+        {files.map(att=>{
+          const kind = kindOf(att.mimeType||"");
+          return (
+            <div key={att.id} className="flex items-center justify-between p-2.5 rounded-lg bg-gray-50 border border-gray-100">
+              <div className="flex items-center gap-2">
+                <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${kind==="PDF"?"bg-red-100 text-red-700":kind==="Excel"?"bg-green-100 text-green-700":"bg-gray-200 text-gray-600"}`}>{kind}</span>
+                <div><p className="text-xs font-medium text-gray-700">{att.filename}</p><p className="text-[10px] text-gray-400">{Math.round((att.size||0)/1024)} KB</p></div>
+              </div>
+              <div className="flex gap-1">
+                <a href={att.publicUrl} target="_blank" rel="noopener noreferrer" className="p-1.5 rounded hover:bg-gray-200"><Eye size={11} className="text-gray-500"/></a>
+                <a href={att.publicUrl} download className="p-1.5 rounded hover:bg-gray-200"><Download size={11} className="text-gray-500"/></a>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 
@@ -4488,8 +4691,13 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
   const en = lang === "en";
   const exportOpsMut = useExportOperations();
   const { data: purchasesApi } = useAccountantOperationsPlatform({ moduleKey: "purchases" });
+  // T06 live surfaces (company-surface handlers, shared with the accountant platform).
+  const { data: purchasesList } = usePurchasesList({ pageSize: 100 });
+  const { data: suppliersLive = [] } = useSuppliers();
+  const { data: returnsLive = [] }   = usePurchaseReturns();
+  const purSummary = purchasesList?.meta?.summary?.purchases;
   const ALL = "الكل";
-  const [viewMode, setViewMode] = useState<"supplier"|"branch">("supplier");
+  const [viewMode, setViewMode] = useState<"supplier"|"branch"|"suppliers"|"returns">("supplier");
   const [filterSupplier, setFilterSupplier] = useState(ALL);
   const [filterBranch,   setFilterBranch]   = useState(ALL);
   const [filterStatus,   setFilterStatus]   = useState(ALL);
@@ -4684,18 +4892,18 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
         {pending.length>0 && <Btn variant="success" size="sm" onClick={approveAll}><CheckCircle2 size={12}/> {t("موافقة جماعية","Bulk Approve")} ({pending.length})</Btn>}
       </div>
 
-      {/* KPI cards */}
+      {/* KPI cards — real GET /operations?moduleKey=purchases → meta.summary.purchases (T06 §1) */}
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard label={t("إجمالي قيمة المشتريات","Total Purchases")} value={`${(totalVal/1000).toFixed(1)}K ${t("ر.س","SAR")}`} sub={t("الفترة المحددة","Selected period")} icon={<ShoppingCart size={18} className="text-blue-600"/>} accent="blue"/>
-        <KpiCard label={t("فواتير معلقة","Pending Invoices")} value={String(pending.length)} sub={t("تنتظر المراجعة","Awaiting review")} icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label={t("فواتير بفروق","Invoices with Variance")} value={String(diffCount)} sub={t("كمية أو سعر","Qty or price")} icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
-        <KpiCard label={t("موردون نشطون","Active Suppliers")} value={String(SUPPLIER_LIST.length)} sub={t("هذه الفترة","This period")} icon={<Truck size={18} className="text-purple-600"/>} accent="purple"/>
+        <KpiCard label={t("مشتريات اليوم","Today's Purchases")} value={purSummary ? `${(purSummary.todayTotalHalalas/100000).toFixed(1)}K ${t("ر.س","SAR")}` : `${(totalVal/1000).toFixed(1)}K ${t("ر.س","SAR")}`} sub={t("كل الحالات","All statuses")} icon={<ShoppingCart size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label={t("قيد المراجعة","Pending Review")} value={String(purSummary?.pendingReview ?? pending.length)} sub={t("تنتظر القرار","Awaiting decision")} icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
+        <KpiCard label={t("فروق كميات","Qty Discrepancies")} value={String(purSummary?.qtyDiscrepancies ?? diffCount)} sub={t("طلبات مفتوحة بها فرق","Open orders w/ diff")} icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
+        <KpiCard label={t("موردون معتمدون","Approved Suppliers")} value={String(suppliersLive.length || SUPPLIER_LIST.length)} sub={purSummary ? `${purSummary.approvedToday} ${t("اعتُمد اليوم","approved today")}` : t("هذه الفترة","This period")} icon={<Truck size={18} className="text-purple-600"/>} accent="purple"/>
       </div>
 
       {/* View mode tabs */}
       <div className="flex items-center justify-between">
         <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-          {([["supplier",`🏭 ${t("عرض حسب المورد","By Supplier")}`],["branch",`🏪 ${t("عرض حسب الفرع","By Branch")}`]] as const).map(([mode,label])=>(
+          {([["supplier",`🏭 ${t("عرض حسب المورد","By Supplier")}`],["branch",`🏪 ${t("عرض حسب الفرع","By Branch")}`],["suppliers",`📇 ${t("الموردون المعتمدون","Suppliers")}`],["returns",`↩️ ${t("المرتجعات","Returns")}`]] as const).map(([mode,label])=>(
             <button key={mode} onClick={()=>{ setViewMode(mode); setExpandedId(null); }}
               className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${viewMode===mode?"bg-white text-gray-800 shadow-sm":"text-gray-500 hover:text-gray-700"}`}>
               {label}
@@ -4771,7 +4979,64 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
         </div>
       </div>
 
-      {effectiveFiltered.length===0
+      {viewMode==="suppliers"
+        ? (
+          /* ── SUPPLIERS DIRECTORY (T06 §5) — real GET /company/me/suppliers ── */
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
+            <h3 className="font-bold text-gray-800 text-sm mb-4">{t("الموردون المعتمدون","Approved Suppliers")} ({suppliersLive.length})</h3>
+            {suppliersLive.length===0
+              ? <EmptyState icon="📇" title={t("لا يوجد موردون","No Suppliers")} desc={t("لم تُرجع الخدمة أي موردين","No suppliers returned")}/>
+              : (
+                <div className="grid grid-cols-2 gap-3">
+                  {suppliersLive.map(s=>{
+                    const stars = Math.round((s.rating ?? 0)/10);  // 0–50 scale → ★
+                    return (
+                      <div key={s.id} className="p-4 bg-gray-50 rounded-xl border border-gray-100 hover:border-gray-200 transition-all">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 flex items-center justify-center flex-shrink-0 text-lg">🏭</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-800 text-sm truncate">{s.name} {s.category && <span className="text-[10px] text-gray-400 font-normal">· {s.category}</span>}</p>
+                            <p className="text-[10px] text-gray-400 mt-0.5">{s.itemsCount} {t("صنف","items")} · {s.monthlyOrderCount} {t("طلبية/شهر","orders/mo")}{s.contactPhone?` · ${s.contactPhone}`:""}</p>
+                          </div>
+                          <div className="text-left flex-shrink-0">
+                            <div className="flex items-center gap-0.5">{[1,2,3,4,5].map(i=><span key={i} className={`text-sm ${i<=stars?"text-amber-400":"text-gray-200"}`}>★</span>)}</div>
+                            {!s.isActive && <span className="text-[9px] text-red-500 font-semibold">{t("غير نشط","inactive")}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+          </div>
+        )
+        : viewMode==="returns"
+        ? (
+          /* ── RETURNS (T06 §6) — real read-only GET /company/me/purchases/returns ── */
+          <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-gray-100 bg-gray-50/60"><h3 className="font-bold text-gray-900 text-sm">{t("المرتجعات","Returns")} <span className="text-[10px] text-gray-400 font-normal">({t("عرض فقط","read-only")})</span></h3></div>
+            {returnsLive.length===0
+              ? <div className="py-8"><EmptyState icon="↩️" title={t("لا توجد مرتجعات","No Returns")} desc={t("لم تُرجع الخدمة أي مرتجعات","No returns returned")}/></div>
+              : (
+                <div>
+                  <div className="grid grid-cols-6 px-4 py-2 bg-gray-50 border-b border-gray-100 text-[10px] font-bold text-gray-500">
+                    <span>{t("رقم المرتجع","Return #")}</span><span>{t("الأمر","Order")}</span><span>{t("الفرع","Branch")}</span><span className="text-center">{t("التاريخ","Date")}</span><span className="text-center">{t("الحالة","Status")}</span><span className="text-left">{t("المبلغ","Amount")}</span>
+                  </div>
+                  {returnsLive.map(r=>(
+                    <div key={r.id} className="grid grid-cols-6 px-4 py-3 border-b border-gray-50 last:border-0 text-xs items-center">
+                      <span className="font-mono font-semibold text-gray-700">{r.returnNumber}</span>
+                      <span className="text-gray-500">{r.orderNumber ?? "—"}</span>
+                      <span className="text-gray-600 truncate">{r.branchName ?? "—"}</span>
+                      <span className="text-center text-gray-500">{r.returnDate}</span>
+                      <span className="text-center"><Badge className="bg-gray-100 text-gray-600 border border-gray-200 text-[10px]">{r.statusLabelAr}</Badge></span>
+                      <span className="text-left font-mono font-bold text-gray-800">{fmtAmt(Math.round(r.totalReturnAmountHalalas/100))} {t("ر.س","SAR")}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+          </div>
+        )
+        : effectiveFiltered.length===0
         ? <div className="bg-white rounded-xl border border-gray-100 p-12 text-center"><EmptyState icon="🔍" title={t("لا توجد نتائج","No Results")} desc={t("غيّر الفلاتر للحصول على نتائج أخرى","Adjust filters to see more results")}/></div>
         : viewMode==="supplier"
           ? (
@@ -4972,6 +5237,7 @@ function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailI
   const { t, lang, dir } = useLang();
   const en = lang === "en";
   const { data: inventoryApi } = usePlatformInventory();
+  const exportInvMut = useExportInventory();
   // Use API per-branch inventory rows when present, else inline INV_BRANCH_DATA.
   const apiBranchInventory = (inventoryApi as any)?.branches ?? (inventoryApi as any)?.byBranch;
   const EFFECTIVE_INV_BRANCH_DATA = (apiBranchInventory && Object.keys(apiBranchInventory).length > 0 ? apiBranchInventory : INV_BRANCH_DATA) as typeof INV_BRANCH_DATA;
@@ -5011,7 +5277,8 @@ function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailI
   const invOps = ops.filter(o=>o.moduleKey==="inventory");
   const pendingInv = invOps.filter(o=>o.status==="pending");
 
-  const exportExcel = (branch?:string) => { alert(branch?`تحميل Excel: جاري تنزيل جرد ${branch}...`:"تحميل Excel: جاري تنزيل جرد كل المطاعم..."); };
+  // Real inventory export (T07 §10) — branch-scoped when a branch id is supplied.
+  const exportExcel = (branch?:string) => exportInvMut.mutate(branch ? { branchId: branch } : {});
 
   // Count anomalies across all branches (change > 200% or < -50%)
   const anomalyCount = (Object.values(EFFECTIVE_INV_BRANCH_DATA).flat() as any[]).filter((it:any)=>{
@@ -5721,6 +5988,8 @@ function ShiftSmartPanel({ cfg, onNum, onDur, onStart, onGen }:{
 function AccShifts({ navigate, setModal }:PageProps) {
   const { data: apiLiveShifts } = usePlatformLiveShifts();
   const { data: apiHistoryShifts } = usePlatformHistoryShifts();
+  const closeShiftMut = useCloseShift();
+  const exportShiftsMut = useExportShifts();
   const [tab, setTab] = useState<"live"|"setup"|"close"|"history">("live");
   const [closeForm, setCloseForm] = useState({cashInDrawer:"",salesSystem:"",notes:"",branch:"فرع الرياض - العليا"});
   const [closeSent, setCloseSent] = useState(false);
@@ -6410,6 +6679,8 @@ function AccCash({}: PageProps) {
 function ExcelImportModal({ assets, setAssets, onClose }:{ assets:any[]; setAssets:(fn:(p:any[])=>any[])=>void; onClose:()=>void }) {
   const { t, lang, dir } = useLang();
   const uploadTemplateMut = useAdminUploadTemplate();
+  const importMut = useImportAssets();
+  const [pickedFile, setPickedFile] = useState<File|null>(null);
   type ImportRow = {
     rowId:number; name:string; cat:string; branch:string; invNum:string;
     cost:number; usefulLife:number; custodian:string; selected:boolean; branchEditing:boolean;
@@ -6438,12 +6709,22 @@ function ExcelImportModal({ assets, setAssets, onClose }:{ assets:any[]; setAsse
     return acc;
   }, {});
 
-  const simulateUpload = (name:string) => {
+  // Pick a real file → preview step. If no file object (synthetic click), keep the demo preview.
+  const pickFile = (f:File|null, name:string) => {
+    setPickedFile(f);
     setFileName(name);
-    setTimeout(()=>setStep(2), 800);
+    setTimeout(()=>setStep(2), 300);
   };
 
+  // Real import (T05 §13): POST /company/me/assets/import (multipart). Server parses + creates.
   const confirmImport = () => {
+    if (pickedFile) {
+      importMut.mutate(pickedFile, {
+        onSuccess: () => { setImportSent(true); setStep(3); },
+      });
+      return;
+    }
+    // No real file chosen (demo click) — fall back to a local preview add so the flow stays usable.
     setAssets(prev=>{
       const newEntries = selectedRows.map((r,i)=>({
         id: `FA-${String(prev.length+i+1).padStart(3,"0")}`,
@@ -6452,7 +6733,7 @@ function ExcelImportModal({ assets, setAssets, onClose }:{ assets:any[]; setAsse
         case_:"acc_register" as const, status:"pending_branch" as const,
         invNum:r.invNum, submittedBy:"المحاسب — استيراد Excel", date:"اليوم",
         custodian:r.custodian,
-        history:[{date:"اليوم", from:"—", to:r.custodian, note:`مستورد من Excel (${fileName}) — أُرسل إشعار للفرع`, by:"المحاسب"}]
+        history:[{date:"اليوم", from:"—", to:r.custodian, note:`مستورد من Excel (${fileName})`, by:"المحاسب"}]
       }));
       return [...prev, ...newEntries];
     });
@@ -6500,9 +6781,11 @@ function ExcelImportModal({ assets, setAssets, onClose }:{ assets:any[]; setAsse
             <div
               onDragOver={e=>{e.preventDefault();setDragging(true);}}
               onDragLeave={()=>setDragging(false)}
-              onDrop={e=>{ e.preventDefault(); setDragging(false); const f=e.dataTransfer.files[0]; if(f) simulateUpload(f.name); }}
+              onDrop={e=>{ e.preventDefault(); setDragging(false); const f=e.dataTransfer.files[0]; if(f) pickFile(f, f.name); }}
               className={`w-full border-2 border-dashed rounded-2xl p-12 flex flex-col items-center gap-4 cursor-pointer transition-all ${dragging?"border-emerald-400 bg-emerald-50":"border-gray-200 bg-gray-50 hover:border-emerald-300 hover:bg-emerald-50/40"}`}
-              onClick={()=>simulateUpload("أصول_الفروع_أكتوبر_2025.xlsx")}>
+              onClick={()=>document.getElementById("asab-asset-import-input")?.click()}>
+              <input id="asab-asset-import-input" type="file" accept=".xlsx,.xls,.csv" style={{display:"none"}}
+                onChange={e=>{ const f=e.target.files?.[0]; if(f) pickFile(f, f.name); }}/>
               <div className="w-16 h-16 rounded-2xl bg-emerald-100 flex items-center justify-center">
                 <Upload size={28} className="text-emerald-600"/>
               </div>
@@ -7464,6 +7747,12 @@ function AccWaste({}: PageProps) {
   const { t, lang, dir } = useLang();
   const { data: apiWaste } = usePlatformWaste();
   const exportWasteMut = useExportWaste();
+  // T07 real mutations — same handlers as the company surface; keyed by entry id + product index.
+  const approveWasteMut = useApproveWaste();
+  const rejectWasteMut  = useRejectWaste();
+  const bulkWasteMut     = useBulkApproveWaste();
+  const patchProductMut  = usePatchWasteProduct();
+  const putAllocsMut      = usePutWasteAllocations();
   type WasteClass = "هدر"|"تالف";
   type Resp = "موظف"|"مطعم";
   type EmpAlloc = { empId:string; empName:string; amount:string };
@@ -7491,26 +7780,45 @@ function AccWaste({}: PageProps) {
   const updProd = (eid:string, pi:number, fn:(p:WasteProduct)=>WasteProduct) =>
     setEntries(prev=>prev.map(e=>e.id===eid?{...e,products:e.products.map((p,i)=>i===pi?fn(p):p)}:e));
 
-  const toggleClass = (eid:string, pi:number) =>
-    updProd(eid,pi,p=>({...p,class_:p.class_==="هدر"?"تالف":"هدر" as WasteClass}));
-  const toggleResp = (eid:string, pi:number) =>
-    updProd(eid,pi,p=>({...p,resp:p.resp==="موظف"?"مطعم":"موظف" as Resp}));
+  const toggleClass = (eid:string, pi:number) => {
+    const next = (entries.find(e=>e.id===eid)?.products[pi]?.class_==="هدر") ? "تالف" : "هدر";
+    updProd(eid,pi,p=>({...p,class_:next as WasteClass}));
+    patchProductMut.mutate({ entryId:eid, productIdx:pi, patch:{ classification: next } });
+  };
+  const toggleResp = (eid:string, pi:number) => {
+    const next = (entries.find(e=>e.id===eid)?.products[pi]?.resp==="موظف") ? "مطعم" : "موظف";
+    updProd(eid,pi,p=>({...p,resp:next as Resp}));
+    patchProductMut.mutate({ entryId:eid, productIdx:pi, patch:{ responsibility: next } });
+  };
 
-  const setAllocField = (eid:string, pi:number, ai:number, field:keyof EmpAlloc, val:string) =>
-    updProd(eid,pi,p=>({
-      ...p,
-      empAllocs:p.empAllocs.map((a,k)=>k===ai
+  // Persist a product's allocations to the server (empNumber + amountHalalas).
+  const persistAllocs = (eid:string, pi:number) => {
+    const prod = entries.find(e=>e.id===eid)?.products[pi];
+    if (!prod) return;
+    putAllocsMut.mutate({ entryId:eid, productIdx:pi,
+      empAllocs: prod.empAllocs.filter(a=>a.empId && a.amount).map(a=>({ empNumber:a.empId, amountHalalas:Math.round((parseFloat(a.amount)||0)*100) })) });
+  };
+  const setAllocField = (eid:string, pi:number, ai:number, field:keyof EmpAlloc, val:string) => {
+    let nextAllocs: EmpAlloc[] = [];
+    updProd(eid,pi,p=>{
+      nextAllocs = p.empAllocs.map((a,k)=>k===ai
         ? {...a,[field]:val,...(field==="empId"?{empName:WASTE_EMP[val]||""}:{})}
-        : a
-      )
-    }));
+        : a);
+      return {...p,empAllocs:nextAllocs};
+    });
+    // Persist the freshly-computed set (server resolves empNumber, sums to product value).
+    putAllocsMut.mutate({ entryId:eid, productIdx:pi,
+      empAllocs: nextAllocs.filter(a=>a.empId && a.amount).map(a=>({ empNumber:a.empId, amountHalalas:Math.round((parseFloat(a.amount)||0)*100) })) });
+  };
   const addAlloc = (eid:string, pi:number) =>
     updProd(eid,pi,p=>({...p,empAllocs:[...p.empAllocs,{empId:"",empName:"",amount:""}]}));
-  const removeAlloc = (eid:string, pi:number, ai:number) =>
+  const removeAlloc = (eid:string, pi:number, ai:number) => {
     updProd(eid,pi,p=>({...p,empAllocs:p.empAllocs.filter((_,k)=>k!==ai)}));
+    persistAllocs(eid, pi);
+  };
 
-  const approve = (id:string) => setEntries(p=>p.map(e=>e.id===id?{...e,status:"approved" as const}:e));
-  const reject  = (id:string) => setEntries(p=>p.map(e=>e.id===id?{...e,status:"rejected" as const}:e));
+  const approve = (id:string) => { setEntries(p=>p.map(e=>e.id===id?{...e,status:"approved" as const}:e)); approveWasteMut.mutate(id); };
+  const reject  = (id:string) => { setEntries(p=>p.map(e=>e.id===id?{...e,status:"rejected" as const}:e)); rejectWasteMut.mutate({ entryId:id, reason:"تحتاج مراجعة" }); };
 
   const pending  = entries.filter(e=>e.status==="pending");
   const approved = entries.filter(e=>e.status==="approved");
@@ -7524,8 +7832,11 @@ function AccWaste({}: PageProps) {
     .flatMap(p=>p.empAllocs)
     .reduce((s,a)=>s+(parseFloat(a.amount)||0),0);
 
-  const approveAllDisplayed = () =>
+  const approveAllDisplayed = () => {
+    const ids = displayedPending.map(e=>e.id);
     setEntries(p=>p.map(e=>(filterBranch==="الكل"||e.branch===filterBranch)?{...e,status:"approved" as const}:e));
+    bulkWasteMut.mutate({ entryIds: ids });
+  };
 
   return (
     <div className="space-y-5" dir="rtl">

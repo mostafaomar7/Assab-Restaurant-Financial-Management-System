@@ -1,0 +1,194 @@
+import { useState } from "react";
+import { X, HelpCircle } from "lucide-react";
+
+interface Props {
+  open: boolean;
+  /** What's being clarified, e.g. operation publicId, for display only. */
+  subject?: string;
+  onClose: () => void;
+  onSubmit: (payload: { message: string }) => void;
+  /** Optional translate function. */
+  t?: (ar: string, en: string) => string;
+}
+
+/**
+ * Request-clarification modal (T03 §6) — non-terminal: sends a message to the
+ * submitter without changing the operation's status. Mirrors RejectModal's look.
+ */
+export function ClarifyModal({
+  open,
+  subject,
+  onClose,
+  onSubmit,
+  t = (ar) => ar,
+}: Props) {
+  const [message, setMessage] = useState("");
+
+  if (!open) return null;
+
+  const canSubmit = message.trim().length > 0;
+
+  function handleSubmit() {
+    if (!canSubmit) return;
+    onSubmit({ message: message.trim() });
+    setMessage("");
+    onClose();
+  }
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,28,53,0.7)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+        padding: 16,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        dir="rtl"
+        style={{
+          width: "100%",
+          maxWidth: 480,
+          background: "white",
+          borderRadius: 16,
+          padding: 24,
+          fontFamily: "'IBM Plex Sans Arabic', system-ui, sans-serif",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            marginBottom: 16,
+          }}
+        >
+          <div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#1e293b",
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <HelpCircle size={18} style={{ color: "#f59e0b" }} />
+              {t("طلب توضيح", "Request Clarification")}
+            </div>
+            {subject && (
+              <div
+                style={{
+                  fontSize: 13,
+                  color: "#64748b",
+                  marginTop: 4,
+                  fontFamily: "monospace",
+                }}
+              >
+                {subject}
+              </div>
+            )}
+            <div
+              style={{
+                fontSize: 12,
+                color: "#94a3b8",
+                marginTop: 8,
+                lineHeight: 1.5,
+              }}
+            >
+              {t(
+                "سيُرسل الطلب إلى من رفع العملية دون تغيير حالتها.",
+                "The request is sent to the submitter without changing the operation's status.",
+              )}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            style={{
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              color: "#94a3b8",
+              padding: 4,
+            }}
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <label
+          style={{
+            display: "block",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "#475569",
+            marginBottom: 6,
+          }}
+        >
+          {t("الرسالة", "Message")} <span style={{ color: "#ef4444" }}>*</span>
+        </label>
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={4}
+          autoFocus
+          placeholder={t("مثال: أرفق تقرير POS", "e.g. Attach the POS report")}
+          style={{
+            width: "100%",
+            padding: "10px 12px",
+            borderRadius: 8,
+            border: "1px solid #e2e8f0",
+            fontSize: 14,
+            fontFamily: "inherit",
+            resize: "vertical",
+            marginBottom: 16,
+          }}
+        />
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-start" }}>
+          <button
+            onClick={handleSubmit}
+            disabled={!canSubmit}
+            style={{
+              padding: "10px 20px",
+              background: canSubmit ? "#f59e0b" : "#cbd5e1",
+              color: "white",
+              border: "none",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: canSubmit ? "pointer" : "not-allowed",
+              fontFamily: "inherit",
+            }}
+          >
+            {t("إرسال الطلب", "Send Request")}
+          </button>
+          <button
+            onClick={onClose}
+            style={{
+              padding: "10px 20px",
+              background: "white",
+              color: "#475569",
+              border: "1px solid #e2e8f0",
+              borderRadius: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              fontFamily: "inherit",
+            }}
+          >
+            {t("إلغاء", "Cancel")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

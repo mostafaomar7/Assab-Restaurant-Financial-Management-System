@@ -6,28 +6,54 @@ import {
 import { toast } from "sonner";
 import { api, downloadBlob } from "../client";
 import type { Page } from "../types";
-import type { Shift, ShiftConfig } from "../types/company";
+import type {
+  CloseShiftResponse,
+  Shift,
+  ShiftConfig,
+  ShiftConfigPayload,
+  ShiftsLiveResponse,
+} from "../types/company";
 import { getErrorMessage } from "../errors";
 import { queryKeys, type ShiftFilter } from "./keys";
 
-export function useShifts(filter: ShiftFilter = {}) {
+// ─── Live board + KPIs (T08 §3) — { active[], overdue[], kpis } (not paginated) ─
+export function useShiftsLive() {
+  return useQuery({
+    queryKey: queryKeys.shiftsLive,
+    queryFn: async () => {
+      const res = await api.get<ShiftsLiveResponse>("/accountant/shifts/live");
+      return res.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+// ─── Closed-shift history (T08 §3) — paginated ───────────────────────────────
+export function useShiftsHistory(filter: ShiftFilter = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(filter).filter(([, v]) => v !== undefined && v !== "" && v !== "all"),
+  );
   return useQuery({
     queryKey: queryKeys.shifts(filter),
     queryFn: async () => {
-      const res = await api.get<Page<Shift>>("/company/me/shifts", {
-        params: filter,
+      const res = await api.get<Page<Shift>>("/accountant/shifts/history", {
+        params: clean,
       });
       return res.data;
     },
   });
 }
 
+// ─── Config (T08 §1) ─────────────────────────────────────────────────────────
 export function useShiftConfigs() {
   return useQuery({
     queryKey: queryKeys.shiftConfigs,
     queryFn: async () => {
-      const res = await api.get<ShiftConfig[]>("/company/me/shifts/configs");
-      return res.data;
+      const res = await api.get<
+        { data: ShiftConfig[] } | ShiftConfig[]
+      >("/company/me/shifts/configs");
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
     },
     staleTime: 60_000,
   });
@@ -41,7 +67,7 @@ export function useSaveShiftConfig() {
       config,
     }: {
       brandId: string;
-      config: Omit<ShiftConfig, "brandId" | "brandName">;
+      config: ShiftConfigPayload;
     }) => {
       const res = await api.put<ShiftConfig>(
         `/company/me/brands/${brandId}/shift-config`,
@@ -57,34 +83,95 @@ export function useSaveShiftConfig() {
   });
 }
 
-export function useCloseShift() {
+// ─── Open (T08 §2) — branch role ─────────────────────────────────────────────
+export function useOpenShift() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      shiftId,
-      notes,
-    }: {
-      shiftId: string;
-      notes?: string;
-    }) => {
-      const res = await api.post<Shift>(
-        `/company/me/shifts/${shiftId}/close`,
-        { notes },
-      );
+    mutationFn: async (body: {
+      cashierEmpNumber?: string;
+      cashierId?: string;
+      openingCashHalalas?: number;
+    } = {}) => {
+      const res = await api.post<Shift>("/company/me/branch/shifts/open", body);
       return res.data;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["shifts"] });
-      toast.success("تم إغلاق الشفت");
+      toast.success("تم فتح الشفت");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }
 
+// ─── Close (T08 §5) — expected cash is server-derived; never send salesSystem ─
+export function useCloseShift() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      shiftId,
+      cashActualHalalas,
+      cardTotalHalalas,
+      aggregatorTotalsHalalas,
+      notes,
+    }: {
+      shiftId: string;
+      cashActualHalalas: number;
+      cardTotalHalalas?: number;
+      aggregatorTotalsHalalas?: number;
+      notes?: string;
+    }) => {
+      const res = await api.post<CloseShiftResponse>(
+        `/company/me/shifts/${shiftId}/close`,
+        { cashActualHalalas, cardTotalHalalas, aggregatorTotalsHalalas, notes },
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["shifts"] });
+      qc.invalidateQueries({ queryKey: ["operations"] });
+      qc.invalidateQueries({ queryKey: queryKeys.accDashboard });
+      toast.success("تم إغلاق الشفت وإرساله للمراجعة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Cash-gap split (T08 §6) — must sum to |variance|; set before final-approve ─
+export function useShiftVarianceAllocations() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      shiftId,
+      allocations,
+    }: {
+      shiftId: string;
+      allocations: Array<{ employeeId?: string; empNumber?: string; amountHalalas: number }>;
+    }) => {
+      const res = await api.post<Shift>(
+        `/company/me/shifts/${shiftId}/variance-allocations`,
+        { allocations },
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["shifts"] });
+      toast.success("تم توزيع فرق الكاش");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Excel (T08 §7) — binary stream, branch-scoped ───────────────────────────
 export function useExportShifts() {
   return useMutation({
-    mutationFn: async (filter: ShiftFilter = {}) => {
-      await downloadBlob("/company/me/shifts/export", "shifts.xlsx", filter);
+    mutationFn: async (
+      filter: ShiftFilter & { format?: "xlsx" | "csv" } = {},
+    ) => {
+      const fmt = filter.format ?? "xlsx";
+      await downloadBlob("/company/me/shifts/export", `shifts.${fmt}`, {
+        ...filter,
+        format: fmt,
+      });
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

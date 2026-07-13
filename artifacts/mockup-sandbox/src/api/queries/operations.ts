@@ -6,15 +6,18 @@ import {
 import { toast } from "sonner";
 import { api } from "../client";
 import type { AuditEvent, Operation, Page } from "../types";
+import type { OperationAttachment } from "../types/company";
 import { getErrorMessage } from "../errors";
 import { queryKeys, type OperationsFilter } from "./keys";
 
 // ─── List operations ─────────────────────────────────────────────────────────
+// Canonical path per T03: bare `/operations` (the `/company/me/operations`
+// copy is an accountant-surface alias to the same handler — prefer canonical).
 export function useOperations(filter: OperationsFilter = {}) {
   return useQuery({
     queryKey: queryKeys.operations(filter),
     queryFn: async () => {
-      const res = await api.get<Page<Operation>>("/company/me/operations", {
+      const res = await api.get<Page<Operation>>("/operations", {
         params: cleanFilter(filter),
       });
       return res.data;
@@ -93,6 +96,26 @@ export function useRejectOperation() {
   });
 }
 
+// ─── Request clarification (non-terminal — status is unchanged) ─────────────
+export function useRequestClarification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, message }: { id: string; message: string }) => {
+      const res = await api.post<Operation>(
+        `/operations/${id}/request-clarification`,
+        { message },
+      );
+      return res.data;
+    },
+    onSuccess: (op) => {
+      qc.invalidateQueries({ queryKey: ["operations"] });
+      qc.invalidateQueries({ queryKey: queryKeys.operationAudit(op.id) });
+      toast.success("تم إرسال طلب التوضيح");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
 export function useBulkApprove() {
   const qc = useQueryClient();
   return useMutation({
@@ -131,14 +154,17 @@ export function useFinalApprove() {
       id,
       isConditional,
       conditionalNote,
+      conditions,
     }: {
       id: string;
       isConditional?: boolean;
       conditionalNote?: string;
+      conditions?: Array<{ text: string; dueAt?: string }>;
     }) => {
       const res = await api.post<Operation>(`/operations/${id}/final-approve`, {
         isConditional,
         conditionalNote,
+        conditions,
       });
       return res.data;
     },
@@ -172,6 +198,21 @@ export function useCorrectOperation() {
       toast.success("تم إنشاء عملية تصحيح");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Attachments (T04 §9) ────────────────────────────────────────────────────
+export function useOperationAttachments(id: string | null | undefined) {
+  return useQuery({
+    queryKey: queryKeys.operationAttachments(id ?? ""),
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const res = await api.get<
+        { data: OperationAttachment[]; meta?: { total: number } } | OperationAttachment[]
+      >(`/operations/${id}/attachments`);
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
   });
 }
 

@@ -1,20 +1,31 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 
-const PRESET_REASONS = [
-  "بيانات غير مكتملة",
-  "فاتورة مفقودة أو غير واضحة",
-  "تناقض في المبالغ",
-  "فرق في الكميات",
-  "مورد غير معتمد",
-  "تاريخ غير صحيح",
-  "أخرى",
-] as const;
+/** Static fallback (Arabic labels, keyed by themselves) used when no API list is supplied. */
+const PRESET_REASONS: ReasonOption[] = [
+  { key: "بيانات غير مكتملة", labelAr: "بيانات غير مكتملة" },
+  { key: "فاتورة مفقودة أو غير واضحة", labelAr: "فاتورة مفقودة أو غير واضحة" },
+  { key: "تناقض في المبالغ", labelAr: "تناقض في المبالغ" },
+  { key: "فرق في الكميات", labelAr: "فرق في الكميات" },
+  { key: "مورد غير معتمد", labelAr: "مورد غير معتمد" },
+  { key: "تاريخ غير صحيح", labelAr: "تاريخ غير صحيح" },
+  { key: "أخرى", labelAr: "أخرى" },
+];
+
+/** The `key` is what gets submitted (T03/T04 reject contract), `labelAr` is display. */
+export interface ReasonOption {
+  key: string;
+  labelAr: string;
+}
+
+const OTHER_KEY = "other";
 
 interface Props {
   open: boolean;
   /** What's being rejected, e.g. operation publicId, for display only. */
   subject?: string;
+  /** API-driven reason list (T03 §13). Falls back to a static list when omitted/empty. */
+  reasons?: ReasonOption[];
   onClose: () => void;
   onSubmit: (payload: { reason: string; notes?: string }) => void;
   /** Optional translate function. */
@@ -24,23 +35,27 @@ interface Props {
 export function RejectModal({
   open,
   subject,
+  reasons,
   onClose,
   onSubmit,
   t = (ar) => ar,
 }: Props) {
-  const [reason, setReason] = useState<string>(PRESET_REASONS[0]);
+  const options = reasons && reasons.length > 0 ? reasons : PRESET_REASONS;
+  const hasOther = options.some((o) => o.key === OTHER_KEY || o.key === "أخرى");
+  const [reasonKey, setReasonKey] = useState<string>(options[0]?.key ?? "");
   const [customReason, setCustomReason] = useState("");
   const [notes, setNotes] = useState("");
 
   if (!open) return null;
 
-  const finalReason = reason === "أخرى" ? customReason.trim() : reason;
+  const isOther = hasOther && (reasonKey === OTHER_KEY || reasonKey === "أخرى");
+  const finalReason = isOther ? customReason.trim() : reasonKey;
   const canSubmit = finalReason.length > 0;
 
   function handleSubmit() {
     if (!canSubmit) return;
     onSubmit({ reason: finalReason, notes: notes.trim() || undefined });
-    setReason(PRESET_REASONS[0]);
+    setReasonKey(options[0]?.key ?? "");
     setCustomReason("");
     setNotes("");
     onClose();
@@ -139,8 +154,8 @@ export function RejectModal({
           {t("سبب الرفض", "Reason")} <span style={{ color: "#ef4444" }}>*</span>
         </label>
         <select
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
+          value={reasonKey}
+          onChange={(e) => setReasonKey(e.target.value)}
           style={{
             width: "100%",
             padding: "10px 12px",
@@ -153,14 +168,14 @@ export function RejectModal({
             marginBottom: 12,
           }}
         >
-          {PRESET_REASONS.map((r) => (
-            <option key={r} value={r}>
-              {r}
+          {options.map((r) => (
+            <option key={r.key} value={r.key}>
+              {r.labelAr}
             </option>
           ))}
         </select>
 
-        {reason === "أخرى" && (
+        {isOther && (
           <input
             value={customReason}
             onChange={(e) => setCustomReason(e.target.value)}
