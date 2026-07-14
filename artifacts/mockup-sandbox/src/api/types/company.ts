@@ -842,54 +842,181 @@ export interface CloseShiftResponse extends Shift {
   operationPublicId: string;
 }
 
-// ─── Employees ───────────────────────────────────────────────────────────────
+// ─── Employees (T09-A) ───────────────────────────────────────────────────────
+/** Short key→labelAr caption rendered verbatim (balance/category/type captions). */
+export interface LabelCaption {
+  key: string;
+  labelAr: string;
+}
+
+/** A1 list row — `balanceHalalas` = Σcredit − Σdebit; negative = employee owes. */
 export interface Employee {
   id: string;
   empNumber: string;
   name: string;
-  nationalId: string;
+  phone: string;
   role: string;
   branchId: string;
   branchName: string;
-  monthlySalaryHalalas: number;
+  /** Monthly salary in halalas (payload field is bare `monthlySalary`, halalas unit). */
+  monthlySalary: number;
+  status: "active" | "inactive" | string;
   balanceHalalas: number;
-  active: boolean;
+  balanceCaption: LabelCaption;
 }
 
+/** Manual movement categories (postable via A3); system keys are read-only. */
+export type EmployeeMovementCategory =
+  | "advance"
+  | "bonus"
+  | "absence"
+  | "receipts_shortage"
+  | "settlement"
+  | "deduction"
+  | "sales_variance"
+  | "cash_variance"
+  | "waste_charge"
+  | "inventory_variance"
+  | string;
+
+/** A2 statement row — newest-first, each carries its own running balance. */
 export interface EmployeeMovement {
   id: string;
-  employeeId: string;
-  date: string;
-  type: "advance" | "deduction" | "bonus" | "salary" | "settlement";
+  movementDate: string;
+  description: string;
+  movementType: "credit" | "debit";
+  movementTypeLabelAr: string;
+  category: EmployeeMovementCategory;
+  categoryLabelAr: string;
+  ref: string;
   amountHalalas: number;
-  notes?: string;
-  approvedBy?: string;
+  amount: number;
+  runningBalanceHalalas: number;
 }
 
-// ─── Cash Custody ────────────────────────────────────────────────────────────
+/** A2 — `GET …/employees/{id}/movements?month=` full statement payload. */
+export interface EmployeeStatement {
+  employee: { id: string; name: string; empNumber: string; branchId: string };
+  period: { month: string | null; from: string; to: string };
+  openingBalanceHalalas: number;
+  closingBalanceHalalas: number;
+  balance: number;
+  balanceHalalas: number;
+  balanceCaption: LabelCaption;
+  /** Standing balance < 0 → render the salary-deduction banner. */
+  autoDeductFromSalary: boolean;
+  totalCredit: number;
+  totalDebit: number;
+  movementCount: number;
+  movements: EmployeeMovement[];
+  meta: { page: number; pageSize: number; total: number; totalPages: number };
+}
+
+/** A3 — add-movement body. `category` required + must be a manual key. */
+export interface EmployeeMovementInput {
+  movementType: "credit" | "debit";
+  /** Integer halalas ≥ 1. */
+  amount: number;
+  category: EmployeeMovementCategory;
+  description: string;
+  date?: string;
+}
+
+/** A4 — settle-balance response. */
+export interface SettleBalanceResult {
+  id: string;
+  employeeId: string;
+  settledHalalas: number;
+  movementType: "credit" | "debit";
+  category: "settlement";
+  categoryLabelAr: string;
+  ref: string;
+  balanceHalalas: number;
+  balanceCaption: LabelCaption;
+}
+
+// ─── Cash Custody (T09-B) ──────────────────────────────────────────────────────
+/** Status is server-derived from the balance — never trust a stored `active`. */
+export type CashCustodyStatus = "normal" | "low" | "critical";
+
+/** B1 list row. */
 export interface CashCustodyRow {
   id: string;
   branchId: string;
   branchName: string;
-  holderUserId: string;
-  holderName: string;
-  balanceHalalas: number;
-  lastSettledAt?: string | null;
-  status: "active" | "settled" | "discrepancy";
+  custodianName: string;
+  amountHalalas: number;
+  usedHalalas: number;
+  remainingHalalas: number;
+  minAlertHalalas: number;
+  usagePct: number;
+  status: CashCustodyStatus;
+  statusLabelAr: string;
+  daysSinceSettlement: number;
+  transactions?: CashTransaction[];
+}
+
+/** B1 `meta.kpis` block. */
+export interface CashCustodyKpis {
+  activeCustodies: number;
+  pendingRequests: number;
+  nearDepletion: number;
+}
+
+/** B1 list envelope — `{ data, meta }` with a KPI block inside meta. */
+export interface CashCustodyPage {
+  data: CashCustodyRow[];
+  meta: {
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
+    kpis: CashCustodyKpis;
+  };
 }
 
 export type CashTxnStatus = "pending" | "approved" | "rejected";
 
+/** B2 transaction row — only approved txns move the balance. */
 export interface CashTransaction {
   id: string;
-  custodyId: string;
-  date: string;
-  type: "in" | "out";
+  txnDate: string;
+  description: string;
+  /** DB stores credit|debit; credit = money in (incl. تعزيز), debit = disbursement. */
+  txnType: "credit" | "debit";
+  typeLabel: { key: "in" | "out"; labelAr: string };
+  typeLabelAr: string;
   amountHalalas: number;
-  category: string;
-  notes?: string;
+  amount: number;
   status: CashTxnStatus;
-  attachmentIds?: string[];
+  source: "treasury" | "manual" | null;
+  runningBalanceHalalas: number;
+}
+
+/** B2 — `GET …/cash-custody/{id}/transactions?month=` monthly ledger payload. */
+export interface CashCustodyLedger {
+  custody: {
+    id: string;
+    custodianName: string;
+    amountHalalas: number;
+    usedHalalas: number;
+    currentBalanceHalalas: number;
+  };
+  period: { month: string | null; from: string; to: string };
+  transactions: CashTransaction[];
+  meta: { page: number; pageSize: number; total: number; totalPages: number };
+}
+
+/** B3 — add-transaction body (replenish / disburse). */
+export interface CashTransactionInput {
+  txnType: "credit" | "debit";
+  /** Integer halalas ≥ 1. */
+  amount: number;
+  description?: string;
+  date?: string;
+  /** `approved` (default, applies now) or `pending` (records a request). */
+  status?: "approved" | "pending";
+  source?: "treasury" | "manual";
 }
 
 // ─── Reminders ───────────────────────────────────────────────────────────────

@@ -178,6 +178,95 @@ export function useFinalApprove() {
   });
 }
 
+// ─── Bulk final-approve (head) — T10 §A4 ─────────────────────────────────────
+// Non-approved ids come back in `failed` with code OP_NOT_APPROVED.
+export function useBulkFinalApprove() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      operationIds,
+      isConditional,
+      conditionalNote,
+    }: {
+      operationIds: string[];
+      isConditional?: boolean;
+      conditionalNote?: string;
+    }) => {
+      const res = await api.post<{
+        finalApproved: string[];
+        failed: Array<{ id: string; code: string }>;
+      }>("/operations/bulk-final-approve", {
+        operationIds,
+        isConditional,
+        conditionalNote,
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["operations"] });
+      qc.invalidateQueries({ queryKey: ["head"] });
+      qc.invalidateQueries({ queryKey: ["platform", "operations"] });
+      if (data.failed.length === 0) {
+        toast.success(`تم الاعتماد النهائي لـ ${data.finalApproved.length} عملية`);
+      } else {
+        toast.warning(
+          `اعتُمد نهائياً ${data.finalApproved.length} وفشل ${data.failed.length}`,
+        );
+      }
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Return for review (head) — T10 §A4 — op → pending, accountant notified ───
+export function useReturnForReview() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, note }: { id: string; note?: string }) => {
+      const res = await api.post<Operation>(
+        `/operations/${id}/return-for-review`,
+        { note },
+      );
+      return res.data;
+    },
+    onSuccess: (op) => {
+      qc.invalidateQueries({ queryKey: ["operations"] });
+      qc.invalidateQueries({ queryKey: ["head"] });
+      qc.invalidateQueries({ queryKey: ["platform", "operations"] });
+      qc.invalidateQueries({ queryKey: queryKeys.operationAudit(op.id) });
+      toast.success("تم إرجاع العملية للمراجعة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Bulk return for review (head) — T10 §A4 ─────────────────────────────────
+export function useBulkReturn() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      operationIds,
+      note,
+    }: {
+      operationIds: string[];
+      note?: string;
+    }) => {
+      const res = await api.post<{
+        returned: string[];
+        failed: Array<{ id: string; code: string }>;
+      }>("/operations/bulk-return", { operationIds, note });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["operations"] });
+      qc.invalidateQueries({ queryKey: ["head"] });
+      qc.invalidateQueries({ queryKey: ["platform", "operations"] });
+      toast.success(`تم إرجاع ${data.returned.length} عملية للمراجعة`);
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
 // ─── Corrective operation (create a new op linked to a rejected/posted one) ──
 export function useCorrectOperation() {
   const qc = useQueryClient();

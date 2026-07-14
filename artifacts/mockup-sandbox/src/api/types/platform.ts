@@ -229,18 +229,22 @@ export interface AdminBrandUploadStatus {
 // ─── Head (platform) ────────────────────────────────────────────────────────
 export interface PlatformHeadDashboard {
   kpis: {
-    awaitingApproval?: number;
-    finalApprovedAwaitingErp?: number;
+    // T10 §A1 canonical KPI keys.
+    awaiting?: number;
+    finalApproved?: number;
     erpPosted?: number;
     rejected?: number;
-    performanceRate?: number;
-    // Enriched fields (post-MISSING_ENDPOINTS_SPEC):
+    accountantsActive?: { active: number; total: number };
     performanceRatePct?: number;
     totalReviewedThisMonth?: number;
-    totalApprovedThisMonth?: number;
-    totalRejectedThisMonth?: number;
     avgReviewTimeMinutes?: number;
     vsLastMonthDeltaPct?: number;
+    // Legacy aliases kept for back-compat.
+    awaitingApproval?: number;
+    finalApprovedAwaitingErp?: number;
+    performanceRate?: number;
+    totalApprovedThisMonth?: number;
+    totalRejectedThisMonth?: number;
   };
   weeklyPerformance?: Array<{
     day: string;
@@ -249,6 +253,22 @@ export interface PlatformHeadDashboard {
     lastWeek: number;
   }>;
   pipeline?: Array<{ stageId: string; count: number }>;
+  // T10 §A1 — real per-brand month performance vs target.
+  brandPerformance?: Array<{
+    brandId: string;
+    name: string;
+    abbr?: string;
+    color?: string;
+    salesHalalas: number;
+    expensesHalalas: number;
+    netHalalas: number;
+    pctOfTarget: number;
+  }>;
+  // Company surface extras (T10 §A1).
+  pipelineCounts?: Record<string, number>;
+  monthlySalesHalalas?: number;
+  salesDeltaPct?: number;
+  awaitingFinalApprovalPreview?: unknown[];
   exceptions?: unknown[];
   moduleAggregation?: Array<{
     moduleKey: string;
@@ -258,6 +278,59 @@ export interface PlatformHeadDashboard {
     counts: { pending: number; approved: number; final: number; erp: number };
     totalAmount: number;
   }>;
+}
+
+// ─── ERP batches (T10 §B) ─────────────────────────────────────────────────────
+// Status enum: ready «جاهز للتصدير» · exported «تم التصدير» · failed «فشل».
+// Legacy rows may read `success` → treat as exported. Never hardcode `success`.
+export type ErpBatchStatus = "ready" | "exported" | "failed" | "success" | string;
+
+export interface ErpBatchRow {
+  id: string;
+  batchId: string;
+  moduleKey?: string;
+  status: ErpBatchStatus;
+  statusLabelAr?: string;
+  operationCount: number;
+  totalAmount: number;
+  branchCount?: number;
+  readyAt?: string | null;
+  completedAt?: string | null;
+  createdAt?: string;
+  companyId?: string;
+}
+
+export interface ErpExportResult {
+  batches: ErpBatchRow[];
+  count: number;
+  totalAmountHalalas: number;
+  // Top-level back-compat mirror of the first batch.
+  id?: string;
+  batchId?: string;
+  status?: ErpBatchStatus;
+  createdAt?: string;
+}
+
+// ─── Admin ERP (T10 §C — cross-company) ───────────────────────────────────────
+export interface AdminErpSummary {
+  connection: {
+    ok: boolean;
+    label: string;
+    lastExportAt?: string | null;
+    lastExportCount?: number;
+  };
+  kpis: {
+    ready: number;
+    exportedToday: number;
+    awaitingHead: number;
+    failed: number;
+  };
+}
+
+export interface AdminErpExportResult {
+  exported: string[];
+  failed: Array<{ batchId?: string; id?: string; code?: string }>;
+  count: number;
 }
 
 export interface PlatformAccountantPerformanceRow {

@@ -5,8 +5,9 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, downloadBlob } from "../client";
+import type { Operation, Page } from "../types";
 import { getErrorMessage } from "../errors";
-import { queryKeys } from "./keys";
+import { queryKeys, type ErpPreviewFilter } from "./keys";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export interface HeadDashboardResponse {
@@ -66,13 +67,38 @@ export interface ERPEligibleOperation {
   operationDate: string;
 }
 
+// T10 §B5 — company ERP preview response (paginated + per-restaurant rollup).
+export interface ErpPreviewResponse {
+  data: Operation[];
+  meta: Page<Operation>["meta"] & {
+    count: number;
+    totalAmountHalalas: number;
+    branches: number;
+    perRestaurant: Array<{
+      restaurantId: string;
+      name: string;
+      count: number;
+      amountHalalas: number;
+    }>;
+  };
+}
+
+// T10 §B batch shape. Status enum: ready «جاهز للتصدير» · exported «تم التصدير» ·
+// failed «فشل التصدير». Legacy rows may read `success` → treat as exported.
 export interface ERPBatch {
   id: string;
-  status: "queued" | "processing" | "completed" | "failed" | string;
-  operationsCount: number;
+  batchId?: string;
+  moduleKey?: string;
+  status: "ready" | "exported" | "failed" | "success" | string;
+  statusLabelAr?: string;
+  operationCount?: number;
+  operationsCount?: number;
+  totalAmount?: number;
   totalHalalas?: number;
+  branchCount?: number;
+  readyAt?: string | null;
+  completedAt?: string | null;
   createdAt: string;
-  completedAt?: string;
   fileUrl?: string;
 }
 
@@ -260,6 +286,39 @@ export function useDownloadERPBatch() {
       );
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Retry a failed batch (T10 §B3) — 409 BATCH_NOT_FAILED otherwise ─────────
+export function useRetryERPBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (batchId: string) => {
+      const res = await api.post<ERPBatch>(`/erp/batches/${batchId}/retry`);
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.erpBatches });
+      qc.invalidateQueries({ queryKey: ["platform", "erp", "batches"] });
+      toast.success("تمت إعادة محاولة الترحيل");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Company head ERP preview (T10 §B5) — paginated + meta.perRestaurant ─────
+export function useERPPreview(filter: ErpPreviewFilter = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(filter).filter(([, v]) => v !== undefined && v !== "" && v !== "all"),
+  );
+  return useQuery({
+    queryKey: queryKeys.erpPreview(filter),
+    queryFn: async () => {
+      const res = await api.get<ErpPreviewResponse>("/company/me/erp/preview", {
+        params: clean,
+      });
+      return res.data;
+    },
   });
 }
 

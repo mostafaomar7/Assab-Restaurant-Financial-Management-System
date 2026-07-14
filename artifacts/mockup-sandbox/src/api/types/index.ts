@@ -131,6 +131,12 @@ export interface Operation {
   correctiveRefId?: string | null;
   erpPosted?: boolean;
   erpBatchId?: string | null;
+  // ── Head queue-row extras (T10 §A2) — present on /head/operations/* rows ────
+  accountantId?: string | null;
+  accountantName?: string | null;
+  moduleLabel?: string;
+  /** Alias of amountHalalas (halalas) emitted on head queue rows. */
+  amount?: number;
   // ── Present only on GET /operations/{id} (single-detail response) ──────────
   payload?: { channels?: unknown[] };
   auditTrail?: AuditEvent[];

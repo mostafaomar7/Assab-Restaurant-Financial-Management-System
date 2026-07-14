@@ -595,51 +595,8 @@ export function usePlatformCashTransactions(custodyId?: string) {
   });
 }
 
-export function useRequestCashSettlement() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({
-      id,
-      ...body
-    }: { id: string } & Record<string, unknown>) => {
-      const res = await api.post<unknown>(
-        `/accountant/cash-custody/${id}/settlement-request`,
-        body,
-      );
-      return res.data;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["platform", "accountant", "cash-custody"],
-      });
-      toast.success("تم إرسال طلب التسوية");
-    },
-    onError: (e) => toast.error(getErrorMessage(e, "ar")),
-  });
-}
-
-export function useCreateCashTransaction() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({
-      id,
-      ...body
-    }: { id: string } & Record<string, unknown>) => {
-      const res = await api.post<unknown>(
-        `/accountant/cash-custody/${id}/transactions`,
-        body,
-      );
-      return res.data;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["platform", "accountant", "cash-custody"],
-      });
-      toast.success("تم تسجيل المعاملة");
-    },
-    onError: (e) => toast.error(getErrorMessage(e, "ar")),
-  });
-}
+// Cash-custody mutations (settlement-request, create-transaction) are served by the
+// shared company hooks in queries/cash.ts — both surfaces hit the same handlers (T09).
 
 // ─── Reminders ──────────────────────────────────────────────────────────────
 export function usePlatformReminders() {

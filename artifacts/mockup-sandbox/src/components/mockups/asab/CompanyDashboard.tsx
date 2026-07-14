@@ -14,8 +14,10 @@ import {
   useBulkApproveWaste, useExportWaste,
   useShiftsLive, useShiftsHistory, useShiftConfigs, useSaveShiftConfig, useCloseShift,
   useShiftVarianceAllocations, useExportShifts,
-  useEmployees, useEmployeeMovements, useExportPayroll,
-  useCashCustody, useCashTransactions, useExportCash,
+  useEmployees, useEmployeeMovements, useCreateEmployeeMovement, useSettleEmployeeBalance,
+  useExportEmployeeStatement, useExportPayroll,
+  useCashCustody, useCashTransactions, useCreateCashTransaction, useApproveCashTxn,
+  useRejectCashTxn, useRequestCashSettlement, useSettleCash, useExportCash, useExportCashLedger,
   useReminders, usePatchReminder, useCreateReminder, useDeleteReminder,
   useReports, useDownloadReport,
   // Company Admin
@@ -58,6 +60,7 @@ import type {
   PurchaseLine, PurchasesBlock, Supplier, PurchaseReturn, PurchaseEnumsCatalogue,
   InventoryReviewBranch, WasteEntry, WasteProduct,
   Shift, ShiftConfig,
+  Employee as ApiEmployee, EmployeeMovementCategory, CashCustodyRow,
 } from "../../../api/types/company";
 import { NotificationBell } from "../../shared/NotificationBell";
 import { RejectModal } from "../../shared/RejectModal";
@@ -4957,118 +4960,137 @@ function AccCompanyWaste() {
 // ═══════════════════════════════════════════════════
 // ACCOUNTANT — EMPLOYEES
 // ═══════════════════════════════════════════════════
-function AccCompanyEmployees() {
-  interface EmpMovement { date:string; desc:string; type:"credit"|"debit"; amount:number; ref:string }
-  interface Employee { id:string; name:string; branch:string; brand:string; role:string; salary:number; advances:number; deductions:number; net:number; status:"نشط"|"موقوف"; movements:EmpMovement[] }
+// Manual movement categories postable via A3 (system keys are read-only, posted by ops).
+const EMP_MANUAL_CATEGORIES: { key: EmployeeMovementCategory; labelAr: string; defaultType: "credit"|"debit" }[] = [
+  { key:"advance",           labelAr:"سلفة",          defaultType:"debit"  },
+  { key:"deduction",         labelAr:"خصم",           defaultType:"debit"  },
+  { key:"absence",           labelAr:"غياب",          defaultType:"debit"  },
+  { key:"receipts_shortage", labelAr:"نقص إيصالات",   defaultType:"debit"  },
+  { key:"bonus",             labelAr:"مكافأة",        defaultType:"credit" },
+];
 
+// «إضافة حركة» modal (T09 §A3) — POST /accountant/employees/{id}/movements.
+function EmpAddMovementModal({ employeeId, employeeName, onClose }:{ employeeId:string; employeeName:string; onClose:()=>void }) {
+  const { t, dir } = useCLang();
+  const createMut = useCreateEmployeeMovement();
+  const [category, setCategory]   = useState<EmployeeMovementCategory>("advance");
+  const [movementType, setType]   = useState<"credit"|"debit">("debit");
+  const [amount, setAmount]       = useState("");
+  const [description, setDesc]    = useState("");
+  const [date, setDate]           = useState("");
+
+  const pickCategory = (k:EmployeeMovementCategory) => {
+    setCategory(k);
+    const c = EMP_MANUAL_CATEGORIES.find(x=>x.key===k);
+    if(c) setType(c.defaultType);
+  };
+  const amountH = Math.round((parseFloat(amount)||0)*100);
+  const submit = () => {
+    if(amountH < 1 || !description.trim()) return;
+    createMut.mutate({ employeeId, payload:{ movementType, amount:amountH, category, description:description.trim(), date:date||undefined } },
+      { onSuccess:()=>onClose() });
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir={dir}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-gray-800">{t("إضافة حركة","Add movement")} — {employeeName}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18}/></button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التصنيف","Category")}</label>
+            <select value={category} onChange={e=>pickCategory(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400">
+              {EMP_MANUAL_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.labelAr}</option>)}
+            </select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("النوع","Type")}</label>
+              <select value={movementType} onChange={e=>setType(e.target.value as "credit"|"debit")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400">
+                <option value="debit">{t("مدين (على الموظف)","Debit")}</option>
+                <option value="credit">{t("دائن (للموظف)","Credit")}</option>
+              </select>
+            </div>
+            <div>
+              <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("المبلغ (ر.س)","Amount")}</label>
+              <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-purple-400"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("البيان","Description")}</label>
+            <input value={description} onChange={e=>setDesc(e.target.value)} placeholder={t("وصف الحركة...","Movement description...")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التاريخ (اختياري)","Date (optional)")}</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/>
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">{t("إلغاء","Cancel")}</button>
+            <Btn variant="primary" onClick={submit} disabled={amountH<1||!description.trim()||createMut.isPending}><Plus size={11}/> {t("تسجيل الحركة","Add")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AccCompanyEmployees() {
+  const { t, dir } = useCLang();
   const [selectedEmp, setSelectedEmp] = useState<string|null>(null);
   const [searchTerm,  setSearchTerm]  = useState("");
-  const [brandFilter, setBrandFilter] = useState("الكل");
+  const [branchFilter,setBranchFilter]= useState("");
+  const [month,       setMonth]       = useState("");   // YYYY-MM, empty = all history
+  const [showAdd,     setShowAdd]     = useState(false);
 
-  const { data: employeesPage } = useEmployees({ search: searchTerm });
-  const { data: serverMovements = [] } = useEmployeeMovements(selectedEmp);
-  const exportPayrollMut = useExportPayroll();
+  const { data: employeesPage } = useEmployees({ q: searchTerm || undefined, branchId: branchFilter || undefined });
+  const { data: statement } = useEmployeeMovements(selectedEmp, month || undefined);
+  const settleMut         = useSettleEmployeeBalance();
+  const exportStatementMut= useExportEmployeeStatement();
+  const exportPayrollMut  = useExportPayroll();
 
-  const fallbackEmployees: Employee[] = [
-    { id:"E01",name:"أنس محمد",    branch:"فرع العليا",   brand:"برغر التاج",       role:"كاشير",    salary:4200, advances:500,  deductions:0,   net:3700, status:"نشط",
-      movements:[
-        {date:"اليوم",  desc:"سلفة راتب",           type:"debit",  amount:500,  ref:"ADV-201"},
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:4200, ref:"SAL-1001"},
-        {date:"25 سبت",desc:"خصم غياب (يوم واحد)",   type:"debit",  amount:140,  ref:"DED-088"},
-        {date:"01 سبت",desc:"راتب سبتمبر",           type:"credit", amount:4200, ref:"SAL-0901"},
-      ]},
-    { id:"E02",name:"ليلى سالم",  branch:"فرع العليا",   brand:"برغر التاج",       role:"كاشير",    salary:3800, advances:0,    deductions:200, net:3600, status:"نشط",
-      movements:[
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:3800, ref:"SAL-1002"},
-        {date:"20 سبت",desc:"خصم فرق كاش",           type:"debit",  amount:200,  ref:"DED-089"},
-        {date:"01 سبت",desc:"راتب سبتمبر",           type:"credit", amount:3800, ref:"SAL-0902"},
-      ]},
-    { id:"E03",name:"فهد العمري", branch:"فرع الحمراء",  brand:"برغر التاج",       role:"طاهٍ",     salary:5500, advances:1000, deductions:0,   net:4500, status:"نشط",
-      movements:[
-        {date:"15 أكت",desc:"سلفة راتب",             type:"debit",  amount:1000, ref:"ADV-202"},
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:5500, ref:"SAL-1003"},
-        {date:"01 سبت",desc:"راتب سبتمبر",           type:"credit", amount:5500, ref:"SAL-0903"},
-      ]},
-    { id:"E04",name:"سارة الغامدي",branch:"فرع الملقا",  brand:"بيتزا التاج",      role:"خدمة عملاء",salary:3500, advances:0,   deductions:350, net:3150, status:"نشط",
-      movements:[
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:3500, ref:"SAL-1004"},
-        {date:"10 أكت",desc:"خصم هدر مخزون",         type:"debit",  amount:180,  ref:"DED-090"},
-        {date:"12 أكت",desc:"خصم فرق كاش",           type:"debit",  amount:170,  ref:"DED-091"},
-        {date:"01 سبت",desc:"راتب سبتمبر",           type:"credit", amount:3500, ref:"SAL-0904"},
-      ]},
-    { id:"E05",name:"عمر الحربي", branch:"فرع الكورنيش", brand:"بيتزا التاج",      role:"مساعد",    salary:3200, advances:200,  deductions:0,   net:3000, status:"موقوف",
-      movements:[
-        {date:"05 أكت",desc:"سلفة",                  type:"debit",  amount:200,  ref:"ADV-203"},
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:3200, ref:"SAL-1005"},
-      ]},
-    { id:"E06",name:"فالح جاسم",  branch:"فرع الورود",   brand:"مطعم التاج الراقي",role:"كاشير",    salary:4800, advances:0,    deductions:420, net:4380, status:"نشط",
-      movements:[
-        {date:"01 أكت",desc:"راتب أكتوبر",           type:"credit", amount:4800, ref:"SAL-1006"},
-        {date:"14 أكت",desc:"خصم هدر — دجاج طازج",   type:"debit",  amount:420,  ref:"DED-092"},
-        {date:"01 سبت",desc:"راتب سبتمبر",           type:"credit", amount:4800, ref:"SAL-0906"},
-      ]},
-  ];
+  const employees: ApiEmployee[] = employeesPage?.data ?? [];
+  const selectedRow = selectedEmp ? employees.find(e=>e.id===selectedEmp) : null;
 
-  const apiEmps = employeesPage?.data ?? [];
-  const employees: Employee[] = apiEmps.map((e): Employee => ({
-    id: e.empNumber || e.id,
-    name: e.name,
-    branch: e.branchName,
-    brand: "—",
-    role: e.role,
-    salary: (e.monthlySalaryHalalas ?? 0) / 100,
-    advances: 0,
-    deductions: 0,
-    net: (e.monthlySalaryHalalas ?? 0) / 100,
-    status: e.active ? "نشط" : "موقوف",
-    movements: [],
-  }));
+  // Header KPIs derived from the list contract (salary + standing balances).
+  const totalSalariesH = employees.reduce((s,e)=>s+(e.monthlySalary ?? 0),0);
+  const owedToCompanyH = employees.reduce((s,e)=>s+(e.balanceHalalas<0?-e.balanceHalalas:0),0);
+  const owedToEmpH     = employees.reduce((s,e)=>s+(e.balanceHalalas>0? e.balanceHalalas:0),0);
+  const activeCount    = employees.filter(e=>e.status==="active").length;
 
-  const filtered = employees.filter(e=>{
-    if(searchTerm && !e.name.includes(searchTerm) && !e.branch.includes(searchTerm)) return false;
-    if(brandFilter!=="الكل" && e.brand!==brandFilter) return false;
-    return true;
-  });
-  const selectedBase = selectedEmp ? employees.find(e=>e.id===selectedEmp) : null;
-  const selected = selectedBase
-    ? {
-        ...selectedBase,
-        movements: serverMovements.map(m => ({
-          date: m.date,
-          desc: m.notes || m.type,
-          type: ((m.amountHalalas ?? 0) >= 0 ? "credit" : "debit") as "credit" | "debit",
-          amount: Math.abs(m.amountHalalas ?? 0) / 100,
-          ref: m.id,
-        })),
-      }
-    : null;
-  const totalSalaries = employees.reduce((s,e)=>s+e.net,0);
-  const totalAdvances  = employees.reduce((s,e)=>s+e.advances,0);
-  const totalDeductions= employees.reduce((s,e)=>s+e.deductions,0);
-
-  const { t, dir } = useCLang();
+  const doSettle = () => {
+    if(!selectedEmp) return;
+    settleMut.mutate({ employeeId: selectedEmp });
+  };
   const SAR = t("ر.س","SAR");
+
+  const balColor = (h:number) => h<0 ? "text-red-600" : h>0 ? "text-emerald-600" : "text-gray-400";
+
   return (
     <div className="space-y-5" dir={dir}>
+      {showAdd && selectedRow && (
+        <EmpAddMovementModal employeeId={selectedRow.id} employeeName={selectedRow.name} onClose={()=>setShowAdd(false)}/>
+      )}
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-800">{t("كشف حساب الموظفين","Employee Accounts")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("الرواتب والحركات المالية لموظفي مجموعة التاج","Salaries and financial movements for Al-Taj Group employees")}</p></div>
-        <button onClick={()=>exportPayrollMut.mutate(new Date().toISOString().slice(0,7))} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><Download size={12}/> {t("تصدير Excel","Export Excel")}</button>
+        <div><h2 className="text-xl font-bold text-gray-800">{t("كشف حساب الموظفين","Employee Accounts")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("الرواتب والحركات المالية للموظفين","Salaries and financial movements")}</p></div>
+        <button onClick={()=>exportPayrollMut.mutate(new Date().toISOString().slice(0,7))} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><Download size={12}/> {t("كشف الرواتب Excel","Payroll Excel")}</button>
       </div>
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard label={t("إجمالي الرواتب","Total Salaries")}    value={fmt(totalSalaries)}    sub={t("ر.س صافي هذا الشهر","SAR net this month")} icon={<Users size={18} className="text-blue-600"/>} accent="blue"/>
-        <KpiCard label={t("إجمالي السلف","Total Advances")}      value={fmt(totalAdvances)}    sub={SAR} icon={<Wallet size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label={t("إجمالي الخصومات","Total Deductions")} value={fmt(totalDeductions)}  sub={SAR} icon={<AlertTriangle size={18} className="text-red-500"/>} accent="red"/>
-        <KpiCard label={t("موظفون نشطون","Active Employees")}    value={String(employees.filter(e=>e.status==="نشط").length)} sub={`${t("من","of")} ${employees.length} ${t("موظف","employee")}`} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
+        <KpiCard label={t("إجمالي الرواتب","Total Salaries")}      value={fmtH(totalSalariesH)} sub={t("ر.س شهرياً","SAR / month")} icon={<Users size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label={t("مستحق على الموظفين","Owed to company")} value={fmtH(owedToCompanyH)} sub={SAR} icon={<AlertTriangle size={18} className="text-red-500"/>} accent="red"/>
+        <KpiCard label={t("مستحق للموظفين","Owed to employees")}   value={fmtH(owedToEmpH)}     sub={SAR} icon={<Wallet size={18} className="text-amber-600"/>} accent="amber"/>
+        <KpiCard label={t("موظفون نشطون","Active Employees")}       value={String(activeCount)}  sub={`${t("من","of")} ${employees.length}`} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
       </div>
       {/* فلاتر */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
         <div className="grid grid-cols-3 gap-3">
-          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">بحث — الاسم أو الفرع</label>
-            <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2"><Search size={13} className="text-gray-400"/><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="اسم الموظف أو الفرع..." className="flex-1 text-sm outline-none"/></div>
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("بحث — اسم الموظف","Search — name")}</label>
+            <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2"><Search size={13} className="text-gray-400"/><input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder={t("اسم الموظف...","Employee name...")} className="flex-1 text-sm outline-none"/></div>
           </div>
-          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">العلامة التجارية</label>
-            <select value={brandFilter} onChange={e=>setBrandFilter(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل",...BRANDS.map(b=>b.name)].map(b=><option key={b}>{b}</option>)}
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الفرع","Branch")}</label>
+            <select value={branchFilter} onChange={e=>setBranchFilter(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+              <option value="">{t("كل الفروع","All branches")}</option>
+              {[...new Map(employees.map(e=>[e.branchId,e.branchName])).entries()].map(([id,name])=><option key={id} value={id}>{name}</option>)}
             </select>
           </div>
         </div>
@@ -5078,90 +5100,116 @@ function AccCompanyEmployees() {
         {/* Left: Employee list */}
         <div className="col-span-2 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
           <div className="px-4 py-3 border-b border-gray-100 bg-gray-50/60">
-            <p className="font-bold text-gray-900 text-sm">قائمة الموظفين ({filtered.length})</p>
+            <p className="font-bold text-gray-900 text-sm">{t("قائمة الموظفين","Employees")} ({employees.length})</p>
           </div>
-          {filtered.map(e=>(
+          {employees.length===0 && <p className="text-center text-gray-400 text-sm py-8">{t("لا يوجد موظفون","No employees")}</p>}
+          {employees.map(e=>(
             <div key={e.id}
-              onClick={()=>setSelectedEmp(selectedEmp===e.id?null:e.id)}
-              className={`flex items-center gap-3 px-4 py-3.5 border-b border-gray-50 last:border-0 cursor-pointer transition-all ${selectedEmp===e.id?"bg-purple-50 border-r-4 border-r-purple-500":"hover:bg-gray-50/70"} ${e.status==="موقوف"?"opacity-60":""}`}>
+              onClick={()=>{ setSelectedEmp(selectedEmp===e.id?null:e.id); setMonth(""); }}
+              className={`flex items-center gap-3 px-4 py-3.5 border-b border-gray-50 last:border-0 cursor-pointer transition-all ${selectedEmp===e.id?"bg-purple-50 border-r-4 border-r-purple-500":"hover:bg-gray-50/70"} ${e.status!=="active"?"opacity-60":""}`}>
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-sm font-bold flex-shrink-0">{e.name[0]}</div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-1.5">
                   <p className="font-semibold text-gray-800 text-sm truncate">{e.name}</p>
-                  {e.status==="موقوف" && <Badge className="bg-red-50 text-red-700 border border-red-200 text-[9px]">موقوف</Badge>}
+                  {e.status!=="active" && <Badge className="bg-red-50 text-red-700 border border-red-200 text-[9px]">{t("موقوف","inactive")}</Badge>}
                 </div>
-                <p className="text-[10px] text-gray-400 mt-0.5">{e.role} · {e.branch}</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">{e.role} · {e.branchName}</p>
               </div>
               <div className="text-left flex-shrink-0">
-                <p className="font-mono font-bold text-emerald-700 text-xs">{fmt(e.net)}</p>
-                <p className="text-[9px] text-gray-400">صافي</p>
+                <p className={`font-mono font-bold text-xs ${balColor(e.balanceHalalas)}`}>{fmtH(e.balanceHalalas)}</p>
+                <p className="text-[9px] text-gray-400">{e.balanceCaption?.labelAr ?? t("الرصيد","balance")}</p>
               </div>
             </div>
           ))}
         </div>
-        {/* Right: Employee ledger */}
+        {/* Right: Employee statement */}
         <div className="col-span-3">
-          {!selected ? (
+          {!selectedRow ? (
             <div className="bg-white rounded-xl border border-dashed border-gray-200 h-64 flex flex-col items-center justify-center gap-2">
               <Users size={32} className="text-gray-300"/>
-              <p className="text-gray-400 text-sm">اختر موظفاً من القائمة لعرض كشف حسابه</p>
+              <p className="text-gray-400 text-sm">{t("اختر موظفاً من القائمة لعرض كشف حسابه","Pick an employee to view their statement")}</p>
             </div>
           ) : (
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-100 bg-gradient-to-l from-purple-50/50 to-white">
                 <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-lg font-bold">{selected.name[0]}</div>
+                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-blue-400 to-purple-500 flex items-center justify-center text-white text-lg font-bold">{selectedRow.name[0]}</div>
                   <div className="flex-1">
-                    <p className="font-bold text-gray-900">{selected.name}</p>
-                    <p className="text-xs text-gray-500">{selected.role} · {selected.branch} · {selected.brand}</p>
-                    <Badge className={`text-[10px] mt-1 ${selected.status==="نشط"?"bg-emerald-50 text-emerald-700 border border-emerald-200":"bg-red-50 text-red-700 border border-red-200"}`}>{selected.status}</Badge>
+                    <p className="font-bold text-gray-900">{selectedRow.name}</p>
+                    <p className="text-xs text-gray-500">{selectedRow.role} · {selectedRow.branchName} · {selectedRow.empNumber}</p>
+                    <Badge className={`text-[10px] mt-1 ${(statement?.balanceCaption ?? selectedRow.balanceCaption)?.key==="creditor"?"bg-emerald-50 text-emerald-700 border border-emerald-200":(statement?.balanceHalalas ?? selectedRow.balanceHalalas)<0?"bg-red-50 text-red-700 border border-red-200":"bg-gray-50 text-gray-500 border border-gray-200"}`}>{(statement?.balanceCaption ?? selectedRow.balanceCaption)?.labelAr}</Badge>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <button onClick={()=>setShowAdd(true)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold hover:bg-purple-100"><Plus size={10}/> {t("إضافة حركة","Add")}</button>
+                    <button onClick={doSettle} disabled={settleMut.isPending||(statement?.balanceHalalas ?? selectedRow.balanceHalalas)===0} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold hover:bg-emerald-100 disabled:opacity-40"><Check size={10}/> {t("تسوية الرصيد","Settle")}</button>
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-3 mt-4">
-                  <div className="bg-blue-50 rounded-xl p-3 text-center">
-                    <p className="text-[10px] text-blue-600 font-semibold">الراتب الأساسي</p>
-                    <p className="font-mono font-bold text-blue-800 text-sm">{fmt(selected.salary)} ر.س</p>
+                <div className="grid grid-cols-4 gap-2 mt-4">
+                  <div className="bg-blue-50 rounded-xl p-2.5 text-center">
+                    <p className="text-[10px] text-blue-600 font-semibold">{t("الراتب","Salary")}</p>
+                    <p className="font-mono font-bold text-blue-800 text-xs">{fmtH(selectedRow.monthlySalary)}</p>
                   </div>
-                  <div className="bg-amber-50 rounded-xl p-3 text-center">
-                    <p className="text-[10px] text-amber-600 font-semibold">السلف</p>
-                    <p className="font-mono font-bold text-amber-800 text-sm">{selected.advances>0?`-${fmt(selected.advances)}`:"لا يوجد"}</p>
+                  <div className="bg-emerald-50 rounded-xl p-2.5 text-center">
+                    <p className="text-[10px] text-emerald-600 font-semibold">{t("إجمالي دائن","Total credit")}</p>
+                    <p className="font-mono font-bold text-emerald-800 text-xs">{fmtH(statement?.totalCredit ?? 0)}</p>
                   </div>
-                  <div className="bg-emerald-50 rounded-xl p-3 text-center border-2 border-emerald-200">
-                    <p className="text-[10px] text-emerald-600 font-semibold">الصافي المستحق</p>
-                    <p className="font-mono font-black text-emerald-800 text-base">{fmt(selected.net)} ر.س</p>
+                  <div className="bg-red-50 rounded-xl p-2.5 text-center">
+                    <p className="text-[10px] text-red-600 font-semibold">{t("إجمالي مدين","Total debit")}</p>
+                    <p className="font-mono font-bold text-red-800 text-xs">{fmtH(statement?.totalDebit ?? 0)}</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-xl p-2.5 text-center border-2 border-gray-200">
+                    <p className="text-[10px] text-gray-600 font-semibold">{t("الرصيد","Balance")}</p>
+                    <p className={`font-mono font-black text-sm ${balColor(statement?.balanceHalalas ?? selectedRow.balanceHalalas)}`}>{fmtH(statement?.balanceHalalas ?? selectedRow.balanceHalalas)}</p>
                   </div>
                 </div>
+                {statement?.autoDeductFromSalary && (
+                  <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+                    <AlertTriangle size={13} className="text-amber-600 flex-shrink-0"/>
+                    <p className="text-[11px] text-amber-800 font-semibold">{t("سيتم خصم الرصيد السالب من الراتب القادم","The negative balance will be deducted from the next salary")}</p>
+                  </div>
+                )}
               </div>
-              <div className="px-5 py-3.5 border-b border-gray-100 bg-gray-50/60">
-                <p className="font-bold text-gray-700 text-xs">سجل الحركات المالية</p>
+              <div className="px-5 py-3 border-b border-gray-100 bg-gray-50/60 flex items-center justify-between gap-3">
+                <p className="font-bold text-gray-700 text-xs">{t("سجل الحركات المالية","Financial movements")}</p>
+                <div className="flex items-center gap-2">
+                  <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="text-[11px] border border-gray-200 rounded-lg px-2 py-1 focus:outline-none"/>
+                  {month && <button onClick={()=>setMonth("")} className="text-[10px] text-purple-600 hover:underline">{t("كل الفترات","All")}</button>}
+                  <button onClick={()=>selectedEmp&&exportStatementMut.mutate({ employeeId:selectedEmp, month:month||undefined })} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold hover:bg-emerald-100"><FileText size={10}/> Excel</button>
+                </div>
               </div>
-              <div className="overflow-hidden">
+              <div className="overflow-x-auto">
                 <table className="w-full text-xs">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-4 py-2.5 text-right font-semibold text-gray-600">التاريخ</th>
-                      <th className="px-4 py-2.5 text-right font-semibold text-gray-600">البيان</th>
-                      <th className="px-4 py-2.5 text-center font-semibold text-gray-600">المرجع</th>
-                      <th className="px-4 py-2.5 text-center font-semibold text-gray-600">دائن</th>
-                      <th className="px-4 py-2.5 text-center font-semibold text-gray-600">مدين</th>
+                      <th className="px-3 py-2.5 text-right font-semibold text-gray-600">{t("التاريخ","Date")}</th>
+                      <th className="px-3 py-2.5 text-right font-semibold text-gray-600">{t("البيان","Description")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold text-gray-600">{t("المرجع","Ref")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold text-gray-600">{t("دائن","Credit")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold text-gray-600">{t("مدين","Debit")}</th>
+                      <th className="px-3 py-2.5 text-center font-semibold text-gray-600">{t("الرصيد","Balance")}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-50">
-                    {selected.movements.map((m,k)=>(
-                      <tr key={k} className="hover:bg-gray-50">
-                        <td className="px-4 py-3 text-gray-500">{m.date}</td>
-                        <td className="px-4 py-3 font-medium text-gray-800">{m.desc}</td>
-                        <td className="px-4 py-3 text-center font-mono text-gray-400 text-[10px]">{m.ref}</td>
-                        <td className="px-4 py-3 text-center font-mono font-bold text-emerald-600">{m.type==="credit"?`${fmt(m.amount)} ر.س`:"—"}</td>
-                        <td className="px-4 py-3 text-center font-mono font-bold text-red-600">{m.type==="debit"?`${fmt(m.amount)} ر.س`:"—"}</td>
+                    {(statement?.movements ?? []).length===0 && (
+                      <tr><td colSpan={6} className="text-center text-gray-400 py-6">{t("لا توجد حركات في هذه الفترة","No movements in this period")}</td></tr>
+                    )}
+                    {(statement?.movements ?? []).map(m=>(
+                      <tr key={m.id} className="hover:bg-gray-50">
+                        <td className="px-3 py-3 text-gray-500 whitespace-nowrap">{new Date(m.movementDate).toLocaleDateString("ar-SA")}</td>
+                        <td className="px-3 py-3 font-medium text-gray-800">{m.description}<span className="block text-[9px] text-gray-400">{m.categoryLabelAr}</span></td>
+                        <td className="px-3 py-3 text-center font-mono text-gray-400 text-[10px]">{m.ref}</td>
+                        <td className="px-3 py-3 text-center font-mono font-bold text-emerald-600">{m.movementType==="credit"?fmtH(m.amountHalalas):"—"}</td>
+                        <td className="px-3 py-3 text-center font-mono font-bold text-red-600">{m.movementType==="debit"?fmtH(m.amountHalalas):"—"}</td>
+                        <td className={`px-3 py-3 text-center font-mono font-bold ${balColor(m.runningBalanceHalalas)}`}>{fmtH(m.runningBalanceHalalas)}</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot className="bg-gray-50 border-t-2 border-gray-200">
                     <tr>
-                      <td colSpan={3} className="px-4 py-2.5 font-bold text-gray-700">الرصيد الصافي المستحق</td>
-                      <td className="px-4 py-2.5 text-center font-mono font-black text-emerald-700">{fmt(selected.net)} ر.س</td>
-                      <td></td>
+                      <td colSpan={2} className="px-3 py-2.5 font-bold text-gray-700">{month?t("رصيد أول المدة","Opening"):t("الرصيد الحالي","Current balance")}</td>
+                      <td className="px-3 py-2.5 text-center font-mono text-gray-500">{month?fmtH(statement?.openingBalanceHalalas ?? 0):""}</td>
+                      <td colSpan={2} className="px-3 py-2.5 font-bold text-gray-700 text-left">{t("رصيد آخر المدة","Closing")}</td>
+                      <td className={`px-3 py-2.5 text-center font-mono font-black ${balColor(statement?.closingBalanceHalalas ?? 0)}`}>{fmtH(statement?.closingBalanceHalalas ?? 0)}</td>
                     </tr>
                   </tfoot>
                 </table>
@@ -5176,195 +5224,226 @@ function AccCompanyEmployees() {
 
 // ACCOUNTANT — CASH CUSTODY
 // ═══════════════════════════════════════════════════
-function AccCompanyCash() {
-  const [expandedBranch, setExpandedBranch] = useState<string|null>(null);
-  const [searchTerm,     setSearchTerm]     = useState("");
-  const [statusFilter,   setStatusFilter]   = useState("");
+// «تعزيز / صرف» modal (T09 §B3) — POST /company/me/cash-custody/{id}/transactions.
+function CashTxnModal({ custodyId, custodianName, remainingHalalas, onClose }:{
+  custodyId:string; custodianName:string; remainingHalalas:number; onClose:()=>void;
+}) {
+  const { t, dir } = useCLang();
+  const createMut = useCreateCashTransaction();
+  const [txnType, setTxnType] = useState<"credit"|"debit">("credit");
+  const [amount,  setAmount]  = useState("");
+  const [description, setDesc]= useState("");
+  const [fromTreasury, setFromTreasury] = useState(true);
 
-  const { data: serverCustody = [] } = useCashCustody();
-  // lazy-loaded transactions for whichever branch is expanded
-  useCashTransactions(expandedBranch);
+  const amountH = Math.round((parseFloat(amount)||0)*100);
+  const overdraw = txnType==="debit" && amountH>remainingHalalas;
+  const submit = () => {
+    if(amountH<1 || overdraw) return;
+    createMut.mutate({ custodyId, payload:{
+      txnType, amount:amountH,
+      description: description.trim() || undefined,
+      source: txnType==="credit" && fromTreasury ? "treasury" : "manual",
+    } }, { onSuccess:()=>onClose() });
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir={dir}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-gray-800">{t("حركة عهدة","Custody transaction")} — {custodianName}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18}/></button>
+        </div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={()=>setTxnType("credit")} className={`px-3 py-2.5 rounded-xl border text-xs font-bold ${txnType==="credit"?"bg-emerald-50 border-emerald-300 text-emerald-700":"border-gray-200 text-gray-500"}`}>⬆ {t("تعزيز عهدة","Replenish")}</button>
+            <button onClick={()=>setTxnType("debit")} className={`px-3 py-2.5 rounded-xl border text-xs font-bold ${txnType==="debit"?"bg-red-50 border-red-300 text-red-700":"border-gray-200 text-gray-500"}`}>⬇ {t("صرف","Disburse")}</button>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("المبلغ (ر.س)","Amount")}</label>
+            <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono focus:outline-none focus:border-purple-400"/>
+            {overdraw && <p className="text-[10px] text-red-600 mt-1">{t("المبلغ يتجاوز المتبقي","Amount exceeds remaining")} ({fmtH(remainingHalalas)} {t("ر.س","SAR")})</p>}
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("البيان (اختياري)","Description (optional)")}</label>
+            <input value={description} onChange={e=>setDesc(e.target.value)} placeholder={txnType==="credit"?t("تعزيز عهدة من الخزينة","Replenish from treasury"):t("بيان الصرف...","Disbursement...")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/>
+          </div>
+          {txnType==="credit" && (
+            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
+              <input type="checkbox" checked={fromTreasury} onChange={e=>setFromTreasury(e.target.checked)}/>
+              {t("تعزيز من الخزينة","From treasury")}
+            </label>
+          )}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">{t("إلغاء","Cancel")}</button>
+            <Btn variant="primary" onClick={submit} disabled={amountH<1||overdraw||createMut.isPending}><Check size={11}/> {t("تسجيل","Submit")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One expandable custody row + its monthly ledger, approve/reject + settle (T09 §B2/B4/B5).
+function CashCustodyCard({ custody }:{ custody:CashCustodyRow }) {
+  const { t } = useCLang();
+  const [open, setOpen]   = useState(false);
+  const [month, setMonth] = useState("");
+  const [showTxn, setShowTxn] = useState(false);
+  const { data: ledger } = useCashTransactions(open ? custody.id : null, month || undefined);
+  const approveMut = useApproveCashTxn();
+  const rejectMut  = useRejectCashTxn();
+  const reqMut     = useRequestCashSettlement();
+  const settleMut  = useSettleCash();
+  const exportLedgerMut = useExportCashLedger();
+
+  const isLow  = custody.status!=="normal";
+  const pct    = Math.round(custody.usagePct ?? 0);
+  const statusCls = custody.status==="critical" ? "bg-red-100 text-red-700 border-red-200"
+                  : custody.status==="low"      ? "bg-amber-100 text-amber-700 border-amber-200"
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200";
+  const doReject = (txnId:string) => {
+    const reason = window.prompt(t("سبب الرفض؟","Rejection reason?")) ?? "";
+    if(reason.trim()) rejectMut.mutate({ custodyId:custody.id, txnId, reason:reason.trim() });
+  };
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      {showTxn && <CashTxnModal custodyId={custody.id} custodianName={custody.custodianName} remainingHalalas={custody.remainingHalalas} onClose={()=>setShowTxn(false)}/>}
+      <div className={`px-5 py-4 flex items-center gap-4 hover:bg-gray-50/70 ${open?"bg-orange-50/20":""} ${isLow?"border-r-4 border-r-red-400":""}`}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-gray-800 text-sm">{custody.branchName}</span>
+            <span className="text-gray-300">·</span>
+            <span className="text-xs text-gray-500">{custody.custodianName}</span>
+            <Badge className={`${statusCls} border text-[10px] font-bold`}>{custody.statusLabelAr}</Badge>
+            {custody.daysSinceSettlement>=30 && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">{custody.daysSinceSettlement} {t("يوم منذ التسوية","d since settle")}</span>}
+          </div>
+          <div className="flex items-center gap-3 mt-1.5">
+            <div className="flex-1 bg-gray-200 rounded-full h-1.5 max-w-32">
+              <div className={`h-1.5 rounded-full ${pct>85?"bg-red-400":"bg-orange-400"}`} style={{width:`${Math.min(pct,100)}%`}}/>
+            </div>
+            <span className="text-xs text-gray-400">{pct}% {t("مُصرَف","used")}</span>
+            <span className={`text-xs font-bold font-mono ${isLow?"text-red-600":"text-emerald-600"}`}>{fmtH(custody.remainingHalalas)} {t("ر.س متبقٍ","SAR left")}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>setShowTxn(true)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold hover:bg-purple-100"><Plus size={10}/> {t("حركة","Txn")}</button>
+          <Btn size="sm" onClick={()=>setOpen(!open)}>{open?<ChevronUp size={12}/>:<ChevronDown size={12}/>} {t("المعاملات","Ledger")}</Btn>
+        </div>
+      </div>
+      {open && (
+        <div className="px-5 pb-4 bg-gray-50/30">
+          <div className="flex items-center justify-between mb-2 pt-2 gap-2 flex-wrap">
+            <p className="text-[11px] font-bold text-gray-500">{t("سجل معاملات العهدة","Custody ledger")} — {custody.custodianName}</p>
+            <div className="flex items-center gap-2">
+              <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="text-[11px] border border-gray-200 rounded-lg px-2 py-1 focus:outline-none"/>
+              <button onClick={()=>exportLedgerMut.mutate({ custodyId:custody.id, month:month||undefined })} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold hover:bg-emerald-100"><FileText size={10}/> Excel</button>
+              {custody.daysSinceSettlement>=30 && <button onClick={()=>reqMut.mutate({ custodyId:custody.id })} disabled={reqMut.isPending} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold hover:bg-amber-100"><Clock size={10}/> {t("طلب تسوية","Request settle")}</button>}
+              <button onClick={()=>settleMut.mutate({ custodyId:custody.id })} disabled={settleMut.isPending} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold hover:bg-blue-100"><Check size={10}/> {t("تسوية العهدة","Settle")}</button>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">{t("التاريخ","Date")}</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">{t("البيان","Description")}</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("النوع","Type")}</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("المبلغ","Amount")}</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("الرصيد","Balance")}</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("الحالة","Status")}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {(ledger?.transactions ?? []).length===0 && (
+                  <tr><td colSpan={6} className="text-center text-gray-400 py-6">{t("لا توجد معاملات","No transactions")}</td></tr>
+                )}
+                {(ledger?.transactions ?? []).map(tx=>(
+                  <tr key={tx.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(tx.txnDate).toLocaleDateString("ar-SA")}</td>
+                    <td className="px-3 py-2 font-medium text-gray-800">{tx.description}</td>
+                    <td className="px-3 py-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${tx.txnType==="credit"?"bg-emerald-100 text-emerald-700":"bg-red-100 text-red-700"}`}>{tx.typeLabelAr}</span></td>
+                    <td className={`px-3 py-2 text-center font-mono font-bold ${tx.txnType==="credit"?"text-emerald-600":"text-red-600"}`}>{tx.txnType==="credit"?"+":"-"}{fmtH(tx.amountHalalas)}</td>
+                    <td className="px-3 py-2 text-center font-mono text-gray-600">{fmtH(tx.runningBalanceHalalas)}</td>
+                    <td className="px-3 py-2 text-center">
+                      {tx.status==="pending" ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={()=>approveMut.mutate({ custodyId:custody.id, txnId:tx.id })} disabled={approveMut.isPending} className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100" title={t("اعتماد","Approve")}><Check size={12}/></button>
+                          <button onClick={()=>doReject(tx.id)} disabled={rejectMut.isPending} className="p-1 rounded bg-red-50 text-red-600 hover:bg-red-100" title={t("رفض","Reject")}><X size={12}/></button>
+                        </div>
+                      ) : (
+                        <Badge className={tx.status==="approved"?"bg-emerald-50 text-emerald-700 text-[10px]":"bg-red-50 text-red-700 text-[10px]"}>{tx.status==="approved"?t("معتمد","approved"):t("مرفوض","rejected")}</Badge>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                <tr>
+                  <td colSpan={4} className="px-3 py-2 font-bold text-gray-700">{t("الرصيد الحالي","Current balance")}</td>
+                  <td className={`px-3 py-2 text-center font-black font-mono ${isLow?"text-red-600":"text-emerald-700"}`}>{fmtH(ledger?.custody.currentBalanceHalalas ?? custody.remainingHalalas)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AccCompanyCash() {
+  const { t, dir } = useCLang();
+  const [searchTerm,   setSearchTerm]   = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+
+  const { data: custodyPage } = useCashCustody({ q: searchTerm || undefined });
   const exportCashMut = useExportCash();
 
-  const fallbackBranches = [
-    { branch:"فرع العليا",    brand:"برغر التاج",       custodian:"فاطمة السالم",    amount:5000, used:3200,
-      txns:[
-        {date:"اليوم",   desc:"صيانة طارئة — مكيف",     type:"debit",  amt:450},
-        {date:"اليوم",   desc:"مواد تنظيف",              type:"debit",  amt:180},
-        {date:"أمس",     desc:"إيداع عهدة أكتوبر",       type:"credit", amt:5000},
-        {date:"12 أكت",  desc:"مستلزمات مكتبية",         type:"debit",  amt:95},
-        {date:"11 أكت",  desc:"إصلاح معدات",             type:"debit",  amt:320},
-        {date:"10 أكت",  desc:"أدوات خدمة",              type:"debit",  amt:210},
-        {date:"10 أكت",  desc:"متفرقات",                  type:"debit",  amt:145},
-        {date:"09 أكت",  desc:"مواد نظافة إضافية",       type:"debit",  amt:800},
-        {date:"09 أكت",  desc:"قطع غيار",                type:"debit",  amt:1000},
-      ], pendingTxns:1 },
-    { branch:"فرع الحمراء",   brand:"برغر التاج",       custodian:"خالد العتيبي",    amount:3000, used:2800,
-      txns:[
-        {date:"أمس",     desc:"إيداع عهدة أكتوبر",       type:"credit", amt:3000},
-        {date:"13 أكت",  desc:"صيانة شبكة كهرباء",       type:"debit",  amt:750},
-        {date:"12 أكت",  desc:"مواد تنظيف وتعقيم",       type:"debit",  amt:420},
-        {date:"11 أكت",  desc:"مستلزمات المطبخ",          type:"debit",  amt:850},
-        {date:"10 أكت",  desc:"إصلاح باب طوارئ",         type:"debit",  amt:380},
-        {date:"09 أكت",  desc:"متفرقات أخرى",            type:"debit",  amt:400},
-      ], pendingTxns:2 },
-    { branch:"فرع الملقا",    brand:"بيتزا التاج",      custodian:"أحمد الحربي",     amount:4000, used:1500,
-      txns:[
-        {date:"أمس",     desc:"إيداع عهدة أكتوبر",       type:"credit", amt:4000},
-        {date:"13 أكت",  desc:"مواد تنظيف",              type:"debit",  amt:600},
-        {date:"12 أكت",  desc:"صيانة مكيفات",            type:"debit",  amt:900},
-      ], pendingTxns:0 },
-    { branch:"فرع الكورنيش",  brand:"بيتزا التاج",      custodian:"عبدالله الدوسري",  amount:3500, used:3400,
-      txns:[
-        {date:"أمس",     desc:"إيداع عهدة أكتوبر",       type:"credit", amt:3500},
-        {date:"13 أكت",  desc:"خدمات كهربائية",          type:"debit",  amt:1200},
-        {date:"12 أكت",  desc:"قطع غيار مطبخ",           type:"debit",  amt:800},
-        {date:"11 أكت",  desc:"مستلزمات متفرقة",         type:"debit",  amt:750},
-        {date:"10 أكت",  desc:"صيانة سبّاكة",            type:"debit",  amt:350},
-        {date:"09 أكت",  desc:"متفرقات",                  type:"debit",  amt:300},
-      ], pendingTxns:3 },
-    { branch:"فرع الورود",    brand:"مطعم التاج الراقي", custodian:"منى الزهراني",    amount:6000, used:2800,
-      txns:[
-        {date:"أمس",     desc:"إيداع عهدة أكتوبر",       type:"credit", amt:6000},
-        {date:"13 أكت",  desc:"ضيافة VIP",               type:"debit",  amt:1200},
-        {date:"12 أكت",  desc:"أدوات مطبخ",              type:"debit",  amt:900},
-        {date:"11 أكت",  desc:"مستلزمات",                type:"debit",  amt:700},
-      ], pendingTxns:0 },
-  ];
+  const custodies = custodyPage?.data ?? [];
+  const kpis = custodyPage?.meta.kpis;
 
-  const branches = serverCustody.map(c => ({
-    branch: c.branchName,
-    brand: "—",
-    custodian: c.holderName,
-    amount: (c.balanceHalalas ?? 0) / 100,
-    used: 0,
-    txns: [] as Array<{date:string; desc:string; type:string; amt:number}>, // lazy-loaded via useCashTransactions
-    pendingTxns: 0,
-  }));
-
-  const filtered = branches.filter(b=>{
-    if(searchTerm && !b.branch.includes(searchTerm) && !b.custodian.includes(searchTerm)) return false;
-    if(statusFilter==="قريبة من النفاد" && (b.amount-b.used)>=500) return false;
-    if(statusFilter==="طلبات معلقة" && b.pendingTxns===0) return false;
+  const filtered = custodies.filter(c=>{
+    if(statusFilter==="قريبة من النفاد" && c.status==="normal") return false;
+    if(statusFilter==="حرجة" && c.status!=="critical") return false;
     return true;
   });
-
-  const totalPending = branches.reduce((s,b)=>s+b.pendingTxns,0);
-  const lowCount     = branches.filter(b=>b.amount-b.used<500).length;
-
-  const { t, dir } = useCLang();
-  const SAR = t("ر.س","SAR");
   return (
     <div className="space-y-5" dir={dir}>
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-800">{t("إدارة العهد النقدية","Petty Cash Management")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("متابعة صناديق النقد لفروع مجموعة التاج","Track petty cash for Al-Taj Group branches")}</p></div>
+        <div><h2 className="text-xl font-bold text-gray-800">{t("إدارة العهد النقدية","Petty Cash Management")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("متابعة صناديق النقد للفروع","Track petty cash for branches")}</p></div>
       </div>
       <div className="grid grid-cols-3 gap-4">
-        <KpiCard label={t("عدد العهود النشطة","Active Custodies")}    value={String(branches.length)} sub={t("فروع لديها عهدة مفتوحة","branches with open custody")} icon={<ArrowLeftRight size={18} className="text-orange-600"/>} accent="orange"/>
-        <KpiCard label={t("طلبات صرف معلقة","Pending Requests")}     value={String(totalPending)}    sub={t("بانتظار المراجعة","awaiting review")} icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label={t("عهود قريبة من النفاد","Near Depletion")}   value={String(lowCount)}        sub={t("أقل من 500 ر.س متبقٍ","less than 500 SAR remaining")} icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
+        <KpiCard label={t("عدد العهود النشطة","Active Custodies")}    value={String(kpis?.activeCustodies ?? custodies.length)} sub={t("فروع لديها عهدة","branches with custody")} icon={<ArrowLeftRight size={18} className="text-orange-600"/>} accent="orange"/>
+        <KpiCard label={t("طلبات صرف معلقة","Pending Requests")}     value={String(kpis?.pendingRequests ?? 0)} sub={t("بانتظار المراجعة","awaiting review")} icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
+        <KpiCard label={t("عهود قريبة من النفاد","Near Depletion")}   value={String(kpis?.nearDepletion ?? 0)}   sub={t("أقل من 500 ر.س متبقٍ","less than 500 SAR")} icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
         <div className="grid grid-cols-3 gap-3 mb-3">
           <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">بحث — الفرع أو المسؤول</label>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("بحث — الفرع أو المسؤول","Search — branch/custodian")}</label>
             <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
               <Search size={13} className="text-gray-400"/>
-              <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="اسم الفرع أو أمين الصندوق..." className="flex-1 text-sm outline-none"/>
+              <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder={t("اسم الفرع أو أمين الصندوق...","Branch or custodian...")} className="flex-1 text-sm outline-none"/>
             </div>
           </div>
           <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">العلامة التجارية</label>
-            <select className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"><option>الكل</option>{BRANDS.map(b=><option key={b.id}>{b.name}</option>)}</select>
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">حالة العهدة</label>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("حالة العهدة","Status")}</label>
             <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل","قريبة من النفاد","طلبات معلقة","نشطة"].map(s=><option key={s}>{s}</option>)}
+              {["الكل","قريبة من النفاد","حرجة"].map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
         </div>
         <div className="flex items-center justify-between">
-          {(searchTerm||statusFilter) && <button onClick={()=>{setSearchTerm("");setStatusFilter("");}} className="text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> مسح الفلاتر</button>}
-          <button onClick={()=>exportCashMut.mutate({})} className="mr-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> تصدير Excel</button>
+          {(searchTerm||statusFilter) && <button onClick={()=>{setSearchTerm("");setStatusFilter("");}} className="text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> {t("مسح الفلاتر","Clear")}</button>}
+          <button onClick={()=>exportCashMut.mutate({})} className="mr-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> {t("ملخص العهد Excel","Custody Excel")}</button>
         </div>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 bg-gray-50/60 border-b border-gray-100">
-          <p className="font-bold text-gray-900 text-sm">كشف العهود النقدية — اضغط على فرع لعرض سجل المعاملات</p>
+          <p className="font-bold text-gray-900 text-sm">{t("كشف العهد النقدية — اضغط على فرع لعرض سجل المعاملات","Custody list — click a branch for its ledger")}</p>
         </div>
-        {filtered.map((b,i)=>{
-          const rem    = b.amount - b.used;
-          const pct    = Math.round(b.used/b.amount*100);
-          const isLow  = rem < 500;
-          const isOpen = expandedBranch===b.branch;
-          return (
-            <div key={i} className="border-b border-gray-100 last:border-0">
-              <div className={`px-5 py-4 flex items-center gap-4 hover:bg-gray-50/70 ${isOpen?"bg-orange-50/20":""} ${isLow?"border-r-4 border-r-red-400":""}`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-gray-800 text-sm">{b.branch}</span>
-                    <span className="text-gray-300">·</span>
-                    <span className="text-xs text-gray-500">{b.custodian}</span>
-                    <Badge className="bg-gray-100 text-gray-500 border border-gray-200 text-[10px]">{b.brand}</Badge>
-                    {isLow && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold border border-red-200">⚠ قريبة من النفاد</span>}
-                    {b.pendingTxns>0 && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">{b.pendingTxns} طلب معلق</span>}
-                  </div>
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <div className="flex-1 bg-gray-200 rounded-full h-1.5 max-w-32">
-                      <div className={`h-1.5 rounded-full ${pct>85?"bg-red-400":"bg-orange-400"}`} style={{width:`${pct}%`}}/>
-                    </div>
-                    <span className="text-xs text-gray-400">{pct}% مُصرَف</span>
-                    <span className={`text-xs font-bold font-mono ${isLow?"text-red-600":"text-emerald-600"}`}>{fmt(rem)} ر.س متبقٍ</span>
-                  </div>
-                </div>
-                <Btn size="sm" onClick={()=>setExpandedBranch(isOpen?null:b.branch)}>
-                  {isOpen?<ChevronUp size={12}/>:<ChevronDown size={12}/>} المعاملات
-                </Btn>
-              </div>
-              {isOpen && (
-                <div className="px-5 pb-4 bg-gray-50/30">
-                  <p className="text-[11px] font-bold text-gray-500 mb-2 pt-2">سجل معاملات العهدة — {b.custodian}</p>
-                  <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                    <table className="w-full text-xs">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-600">التاريخ</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-600">البيان</th>
-                          <th className="px-3 py-2 text-center font-semibold text-gray-600">النوع</th>
-                          <th className="px-3 py-2 text-center font-semibold text-gray-600">المبلغ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {b.txns.map((t,k)=>(
-                          <tr key={k} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 text-gray-500">{t.date}</td>
-                            <td className="px-3 py-2 font-medium text-gray-800">{t.desc}</td>
-                            <td className="px-3 py-2 text-center">
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.type==="credit"?"bg-emerald-100 text-emerald-700":"bg-red-100 text-red-700"}`}>
-                                {t.type==="credit"?"إيداع":"صرف"}
-                              </span>
-                            </td>
-                            <td className={`px-3 py-2 text-center font-mono font-bold ${t.type==="credit"?"text-emerald-600":"text-red-600"}`}>
-                              {t.type==="credit"?"+":"-"}{fmt(t.amt)} ر.س
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-gray-50 border-t-2 border-gray-200">
-                        <tr>
-                          <td colSpan={2} className="px-3 py-2 font-bold text-gray-700">الرصيد الحالي</td>
-                          <td></td>
-                          <td className={`px-3 py-2 text-center font-black font-mono ${isLow?"text-red-600":"text-emerald-700"}`}>{fmt(rem)} ر.س</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {filtered.length===0 && <p className="text-center text-gray-400 text-sm py-8">{t("لا توجد عهد","No custodies")}</p>}
+        {filtered.map(c=><CashCustodyCard key={c.id} custody={c}/>)}
       </div>
     </div>
   );

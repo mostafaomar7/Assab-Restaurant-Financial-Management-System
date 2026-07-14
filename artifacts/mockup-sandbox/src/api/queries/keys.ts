@@ -71,17 +71,17 @@ export const queryKeys = {
   shifts: (filter?: ShiftFilter) => ["shifts", "history", { filter }] as const,
   shiftConfigs: ["shifts", "configs"] as const,
 
-  // Employees
+  // Employees (T09-A)
   employees: (filter?: EmployeeFilter) =>
     ["employees", { filter }] as const,
-  employeeMovements: (employeeId: string) =>
-    ["employees", employeeId, "movements"] as const,
+  employeeMovements: (employeeId: string, month?: string) =>
+    ["employees", employeeId, "movements", month ?? "all"] as const,
 
-  // Cash custody
+  // Cash custody (T09-B)
   cashCustody: (filter?: CashFilter) =>
     ["cash-custody", { filter }] as const,
-  cashTransactions: (custodyId: string) =>
-    ["cash-custody", custodyId, "transactions"] as const,
+  cashTransactions: (custodyId: string, month?: string) =>
+    ["cash-custody", custodyId, "transactions", month ?? "all"] as const,
 
   // Reminders
   reminders: ["accountant", "reminders"] as const,
@@ -209,8 +209,18 @@ export const queryKeys = {
     ["platform", "erp", "eligible-operations", { filter }] as const,
   platformErpBatches: (filter?: PlatformErpFilter) =>
     ["platform", "erp", "batches", { filter }] as const,
+  platformErpBatchStatus: (batchId: string) =>
+    ["platform", "erp", "batches", batchId, "status"] as const,
   platformReportsInternal: ["platform", "reports", "internal"] as const,
   platformReportsOwner: ["platform", "reports", "owner"] as const,
+
+  // ─── Company head ERP preview (T10 §B5) ────────────────────────────────────
+  erpPreview: (filter?: ErpPreviewFilter) => ["erp", "preview", { filter }] as const,
+
+  // ─── Admin ERP (T10 §C — cross-company, /admin/erp/*) ──────────────────────
+  adminErpSummary: ["platform", "admin", "erp", "summary"] as const,
+  adminErpBatches: (filter?: AdminErpFilter) =>
+    ["platform", "admin", "erp", "batches", { filter }] as const,
 
   // ─── Platform Accountant (/api/v1/accountant/*) ────────────────────────────
   platformAccountantDashboard: ["platform", "accountant", "dashboard"] as const,
@@ -368,13 +378,21 @@ export interface ShiftFilter {
 
 export interface EmployeeFilter {
   branchId?: string;
-  active?: boolean;
-  search?: string;
+  empNumber?: string;
+  /** Name search (T09-A1). */
+  q?: string;
+  page?: number;
+  pageSize?: number;
 }
 
 export interface CashFilter {
   branchId?: string;
-  status?: "active" | "settled" | "discrepancy" | "all";
+  /** Branch/custodian search (T09-B1). */
+  q?: string;
+  page?: number;
+  pageSize?: number;
+  /** Export format passthrough (xlsx|csv). */
+  format?: "xlsx" | "csv";
 }
 
 export interface CompanyUsersFilter {
@@ -476,6 +494,9 @@ export interface PlatformOpsFilter {
   page?: number;
   pageSize?: number;
   groupBy?: "module" | "accountant" | "flat";
+  /** T10 §A3 — server-side accountant×module grouping for the pending queue. */
+  view?: "grouped" | "flat";
+  groupPreview?: number;
   accountantId?: string;
   brandId?: string;
   branchId?: string;
@@ -492,7 +513,31 @@ export interface PlatformErpFilter {
   dateTo?: string;
   restaurantId?: string;
   branchId?: string;
-  status?: "approved" | "all";
+  status?: "approved" | "all" | "ready" | "exported" | "failed";
+  page?: number;
+  pageSize?: number;
+}
+
+// Company head ERP preview (T10 §B5).
+export interface ErpPreviewFilter {
+  moduleKey?: string;
+  restaurantId?: string;
+  branchId?: string;
+  status?: string;
+  periodType?: "today" | "week" | "month" | "custom";
+  from?: string;
+  to?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+// Admin cross-company ERP log (T10 §C).
+export interface AdminErpFilter {
+  companyId?: string;
+  moduleKey?: string;
+  status?: "ready" | "exported" | "failed" | "all";
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   pageSize?: number;
 }

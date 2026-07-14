@@ -159,6 +159,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       companyChannel.listen(".operation.status_changed", (_e: OperationStatusChangedEvent) =>
         invalidateAllOps(),
       );
+      // T10 §Realtime — a batch flipped to `exported`.
+      companyChannel.listen(".erp.batch.completed", () => {
+        queryClient.invalidateQueries({ queryKey: ["erp"] });
+        queryClient.invalidateQueries({ queryKey: ["platform", "erp"] });
+        queryClient.invalidateQueries({ queryKey: ["platform", "admin", "erp"] });
+        invalidateAllOps();
+      });
       companyChannel.listen(".approval.pending", () =>
         queryClient.invalidateQueries({ queryKey: ["accountant", "dashboard"] }),
       );
@@ -198,6 +205,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     brandIds.forEach((brandId) => {
       const brandChannel = echo.private(`operations.brand.${brandId}`);
       brandChannel.listen(".operation.status_changed", invalidateAllOps);
+      brandChannel.listen(".erp.batch.completed", () => {
+        queryClient.invalidateQueries({ queryKey: ["erp"] });
+        queryClient.invalidateQueries({ queryKey: ["platform", "erp"] });
+        invalidateAllOps();
+      });
       brandChannel.listen(".asset_draft.created", () =>
         queryClient.invalidateQueries({ queryKey: ["asset-drafts"] }),
       );
@@ -205,6 +217,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         queryClient.invalidateQueries({ queryKey: ["shifts"] }),
       );
       brandChannel.listen(".shift.closed", () =>
+        queryClient.invalidateQueries({ queryKey: ["shifts"] }),
+      );
+      brandChannel.listen(".shift.late", () =>
+        queryClient.invalidateQueries({ queryKey: ["shifts"] }),
+      );
+      brandChannel.listen(".shift.reopened", () =>
         queryClient.invalidateQueries({ queryKey: ["shifts"] }),
       );
       // Section 4 — daily inventory variance allocation broadcast.
@@ -234,8 +252,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       branchChannel.listen(".shift.closed", () =>
         queryClient.invalidateQueries({ queryKey: ["shifts"] }),
       );
+      branchChannel.listen(".shift.late", () =>
+        queryClient.invalidateQueries({ queryKey: ["shifts"] }),
+      );
+      branchChannel.listen(".shift.reopened", () =>
+        queryClient.invalidateQueries({ queryKey: ["shifts"] }),
+      );
       branchChannel.listen(".reminder.responded", () =>
         queryClient.invalidateQueries({ queryKey: ["accountant", "reminders"] }),
+      );
+      // T09 §B — a txn dropped a custody to low/critical.
+      branchChannel.listen(".custody.low_balance", () =>
+        queryClient.invalidateQueries({ queryKey: ["cash-custody"] }),
       );
     });
 

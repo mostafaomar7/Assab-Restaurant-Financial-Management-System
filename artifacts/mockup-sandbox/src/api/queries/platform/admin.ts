@@ -22,6 +22,9 @@ import type {
   AdminSettings,
   AdminSubscription,
   AdminUserRow,
+  AdminErpSummary,
+  AdminErpExportResult,
+  ErpBatchRow,
   PlatformAdminOverview,
 } from "../../types/platform";
 import {
@@ -30,6 +33,7 @@ import {
   type AdminBranchesFilter,
   type AdminBrandsFilter,
   type AdminCompaniesFilter,
+  type AdminErpFilter,
   type AdminSubscriptionsFilter,
   type AdminUsersFilter,
 } from "../keys";
@@ -1602,6 +1606,57 @@ export function useCancelAdminJob() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform", "admin", "jobs"] });
       toast.success("تم إلغاء المهمة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Admin ERP (T10 §C — cross-company, admin only) ───────────────────────────
+export function useAdminErpSummary() {
+  return useQuery({
+    queryKey: queryKeys.adminErpSummary,
+    queryFn: async () => {
+      const res = await api.get<AdminErpSummary>("/admin/erp/summary");
+      return res.data;
+    },
+    staleTime: 15_000,
+  });
+}
+
+export function useAdminErpBatches(filter: AdminErpFilter = {}) {
+  const clean = Object.fromEntries(
+    Object.entries(filter).filter(([, v]) => v !== undefined && v !== "" && v !== "all"),
+  );
+  return useQuery({
+    queryKey: queryKeys.adminErpBatches(filter),
+    queryFn: async () => {
+      const res = await api.get<Page<ErpBatchRow> | ErpBatchRow[]>(
+        "/admin/erp/batches",
+        { params: clean },
+      );
+      const d = res.data;
+      return Array.isArray(d) ? { data: d, meta: undefined } : d;
+    },
+  });
+}
+
+// One of batchIds / allReady is required (else 422).
+export function useAdminErpExport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: { batchIds?: string[]; allReady?: boolean }) => {
+      const res = await api.post<AdminErpExportResult>("/admin/erp/export", body);
+      return res.data;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "erp"] });
+      if ((data.failed?.length ?? 0) === 0) {
+        toast.success(`تم تصدير ${data.count} دفعة`);
+      } else {
+        toast.warning(
+          `تم تصدير ${data.exported.length} وفشل ${data.failed.length}`,
+        );
+      }
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

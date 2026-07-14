@@ -24,10 +24,6 @@ import {
   usePlatformInventory,
   usePlatformInventoryCatalog,
   usePlatformWaste,
-  usePlatformLiveShifts,
-  usePlatformHistoryShifts,
-  usePlatformEmployees,
-  usePlatformCashCustody,
   usePlatformReminders,
   // Head
   useHeadDashboardPlatform,
@@ -101,6 +97,20 @@ import {
   useExportSuppliers,
   useExportPayroll,
   useExportCash,
+  // T09 — employees ledger & cash custody (shared company hooks; same handlers as platform twin)
+  useEmployees,
+  useEmployeeMovements,
+  useCreateEmployeeMovement,
+  useSettleEmployeeBalance,
+  useExportEmployeeStatement,
+  useCashCustody,
+  useCashTransactions,
+  useCreateCashTransaction,
+  useApproveCashTxn,
+  useRejectCashTxn,
+  useRequestCashSettlement,
+  useSettleCash,
+  useExportCashLedger,
   useExportWaste,
   useCreatePlatformAsset,
   useCreateReminder,
@@ -156,6 +166,14 @@ import {
   useFinalApprove,
   useBulkApprove,
   useCreateERPBatch,
+  // T10 — head group actions + ERP retry/download + admin ERP
+  useBulkFinalApprove,
+  useReturnForReview,
+  useRetryERPBatch,
+  useDownloadERPBatch,
+  useAdminErpSummary,
+  useAdminErpBatches,
+  useAdminErpExport,
   // T03/T04 — single-op detail, attachments, clarification, variance-assign, day/kpis
   useOperation,
   useOperationAttachments,
@@ -190,6 +208,8 @@ import {
   usePutWasteAllocations,
   useExportInventory,
   // T08 — shifts (company-surface handlers, shared)
+  useShiftsLive,
+  useShiftsHistory,
   useCloseShift,
   useExportShifts,
 } from "../../../api/queries";
@@ -353,7 +373,7 @@ const EN_NAV_LABELS: Record<string, string> = {
   "admin-packages":"Packages",
   "admin-companies":"Company Subscriptions","admin-permissions":"Permissions",
   "admin-reports":"Report Manager","admin-audit":"Activity Log",
-  "admin-settings":"System Settings",
+  "admin-erp":"ERP Export","admin-settings":"System Settings",
   "branch-overview":"Overview","branch-employees":"Employees",
   "branch-items":"Items","branch-suppliers":"Suppliers",
   "branch-upload":"Upload Data","branch-settings":"Branch Settings",
@@ -503,6 +523,7 @@ interface PageProps {
   rejectOp: (id: string, reason: string) => void;
   finalApproveOp: (id: string, conditional?: { note: string }) => void;
   bulkApprove: (ids: string[]) => void;
+  returnForReview?: (id: string, note?: string) => void;
   addCorrectiveOp?: (refId: string) => void;
   markErpPosted?: (ids: string[]) => Promise<string> | void;
 }
@@ -595,6 +616,7 @@ const NAV_CONFIG: Record<RoleId, NavEntry[]> = {
     { id:"admin-reports",        label:"مدير التقارير",     icon:<BarChart3 size={16}/> },
     { id:"admin-audit",          label:"سجل النشاطات",      icon:<FileText size={16}/> },
     { section:"النظام" },
+    { id:"admin-erp",            label:"التصدير لـ ERP",     icon:<ChevronsRight size={16}/> },
     { id:"admin-settings",       label:"إعدادات النظام",    icon:<Settings size={16}/> },
   ],
   branch: [
@@ -1575,10 +1597,11 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
 // ─────────────────────────────────────────────
 // APP SHELL
 // ─────────────────────────────────────────────
-function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove, addCorrectiveOp, markErpPosted, navigate, logout, setModal, setDetailId }:{
+function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove, returnForReview, addCorrectiveOp, markErpPosted, navigate, logout, setModal, setDetailId }:{
   state:AppState; ops:Op[];
   approveOp:(id:string)=>void; rejectOp:(id:string,r:string)=>void;
   finalApproveOp:(id:string, conditional?:{note:string})=>void; bulkApprove:(ids:string[])=>void;
+  returnForReview?:(id:string, note?:string)=>void;
   addCorrectiveOp?:(refId:string)=>void; markErpPosted?:(ids:string[])=>Promise<string>|void;
   navigate:(p:PageId)=>void; logout:()=>void;
   setModal:(id:string|null)=>void; setDetailId:(id:string|null)=>void;
@@ -1602,7 +1625,7 @@ function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove
     return "";
   }, [role, state.page, lang]);
 
-  const pageProps: PageProps = { navigate, setModal, setDetailId, detailId:state.detailId, ops, approveOp, rejectOp, finalApproveOp, bulkApprove, addCorrectiveOp, markErpPosted };
+  const pageProps: PageProps = { navigate, setModal, setDetailId, detailId:state.detailId, ops, approveOp, rejectOp, finalApproveOp, bulkApprove, returnForReview, addCorrectiveOp, markErpPosted };
 
   const enProfile = lang === "ar" ? profile : { ...profile, ...EN_ROLE_LABELS[role] };
 
@@ -1882,6 +1905,7 @@ function PageRouter({ state, pageProps, adminUsers, setAdminUsers }:{
     if(page==="admin-reports")       return <AdminReports {...p}/>;
     if(page==="admin-audit")         return <AdminAudit {...p}/>;
     if(page==="admin-permissions")   return <AdminPermissions {...p}/>;
+    if(page==="admin-erp")           return <AdminERP {...p}/>;
     if(page==="admin-settings")      return <AdminSettings {...p}/>;
   }
   if(role==="branch") {
@@ -5986,13 +6010,14 @@ function ShiftSmartPanel({ cfg, onNum, onDur, onStart, onGen }:{
 }
 
 function AccShifts({ navigate, setModal }:PageProps) {
-  const { data: apiLiveShifts } = usePlatformLiveShifts();
-  const { data: apiHistoryShifts } = usePlatformHistoryShifts();
+  const { data: shiftsLive } = useShiftsLive();
+  const { data: shiftsHistoryPage } = useShiftsHistory();
   const closeShiftMut = useCloseShift();
   const exportShiftsMut = useExportShifts();
   const [tab, setTab] = useState<"live"|"setup"|"close"|"history">("live");
-  const [closeForm, setCloseForm] = useState({cashInDrawer:"",salesSystem:"",notes:"",branch:"فرع الرياض - العليا"});
-  const [closeSent, setCloseSent] = useState(false);
+  // Close form (T08 §5): expected cash is server-derived — no salesSystem field.
+  const [closeForm, setCloseForm] = useState({shiftId:"",cashActual:"",cardTotal:"",aggTotal:"",notes:""});
+  const [closeSent, setCloseSent] = useState<string|null>(null);
 
   // ─── Shift Setup state ─────────────────────────────────────────────────────
   const [brandCfgs,  setBrandCfgs]  = useState<BrandShiftState[]>(()=>BRANDS_CATALOG.map(sInitBrand));
@@ -6028,21 +6053,36 @@ function AccShifts({ navigate, setModal }:PageProps) {
     setRestEdits(p=>({...p,[rId]:null}));
   };
 
-  // Live & historical shifts come from the platform API; empty until the backend returns them.
-  const LIVE_SHIFTS_FALLBACK: any[] = [];
-  const liveShifts = (Array.isArray(apiLiveShifts) ? apiLiveShifts : []) as any[];
-  const overdueShifts = liveShifts.filter(s=>s.durationHrs>8);
+  // Live board (T08 §3) — { active[], overdue[], kpis } at top level (not paginated).
+  const activeShifts  = shiftsLive?.active ?? [];
+  const overdueShifts = shiftsLive?.overdue ?? [];
+  const liveShifts    = [...activeShifts, ...overdueShifts];
+  const kpis          = shiftsLive?.kpis;
+  const shiftHistory  = shiftsHistoryPage?.data ?? [];
 
-  const SHIFT_HISTORY_FALLBACK: any[] = [];
-  const shiftHistory = ((apiHistoryShifts as any)?.data?.length > 0 ? (apiHistoryShifts as any).data : []) as any[];
+  const shiftDurHrs = (s:{startedAt:string}) => Math.max(0,(Date.now()-new Date(s.startedAt).getTime())/36e5);
+  const fmtTime = (iso?:string|null) => iso ? new Date(iso).toLocaleTimeString("ar-SA",{hour:"2-digit",minute:"2-digit"}) : "—";
+  const fmtDate = (iso?:string|null) => iso ? new Date(iso).toLocaleDateString("ar-SA") : "—";
 
-  const cashIn  = parseFloat(closeForm.cashInDrawer)||0;
-  const salesSys = parseFloat(closeForm.salesSystem)||0;
-  const cashDiff = cashIn - salesSys;
+  const closeShift = liveShifts.find(s=>s.id===closeForm.shiftId);
+  const expectedH  = closeShift?.cashExpectedHalalas ?? 0;
+  const cashH      = Math.round((parseFloat(closeForm.cashActual)||0)*100);
+  const cashDiffH  = closeShift && closeForm.cashActual!=="" ? cashH - expectedH : null;
 
   const submitClose = () => {
-    setCloseSent(true);
-    setTimeout(()=>{ setCloseSent(false); setCloseForm({cashInDrawer:"",salesSystem:"",notes:"",branch:"فرع الرياض - العليا"}); setTab("history"); },1800);
+    if (!closeForm.shiftId || closeForm.cashActual==="") return;
+    closeShiftMut.mutate({
+      shiftId: closeForm.shiftId,
+      cashActualHalalas: cashH,
+      cardTotalHalalas: closeForm.cardTotal!=="" ? Math.round((parseFloat(closeForm.cardTotal)||0)*100) : undefined,
+      aggregatorTotalsHalalas: closeForm.aggTotal!=="" ? Math.round((parseFloat(closeForm.aggTotal)||0)*100) : undefined,
+      notes: closeForm.notes || undefined,
+    }, {
+      onSuccess: (data) => {
+        setCloseSent(data.operationPublicId || data.operationId);
+        setTimeout(()=>{ setCloseSent(null); setCloseForm({shiftId:"",cashActual:"",cardTotal:"",aggTotal:"",notes:""}); setTab("history"); },2200);
+      },
+    });
   };
 
   return (
@@ -6058,12 +6098,12 @@ function AccShifts({ navigate, setModal }:PageProps) {
         </span>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs (T08 §3 — 4 tiles from live.kpis) */}
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard label="شفتات نشطة"      value={String(liveShifts.length)}         sub=""                  icon={<span className="w-2 h-2 rounded-full bg-emerald-500"/>} accent="emerald"/>
-        <KpiCard label="شفت متأخر"        value={String(overdueShifts.length)}      sub="يحتاج متابعة"      icon={<AlertTriangle size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label="متوسط مدة الشفت" value={`${liveShifts.length ? (liveShifts.reduce((s,x)=>s+(x.durationHrs||0),0)/liveShifts.length).toFixed(1) : "0"} ساعة`}  sub="هذا اليوم"         icon={<TrendingUp size={18} className="text-purple-600"/>} accent="purple"/>
-        <KpiCard label="إجمالي الطلبات"  value={String(liveShifts.reduce((s,x)=>s+(x.orders||0),0))}       sub="هذا اليوم"         icon={<ShoppingCart size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label="مفتوح الآن"          value={String(kpis?.openNow ?? liveShifts.length)}  sub="شفت نشط"          icon={<span className="w-2 h-2 rounded-full bg-emerald-500"/>} accent="emerald"/>
+        <KpiCard label="مغلقة اليوم"          value={String(kpis?.closedToday ?? 0)}              sub="شفت مغلق"         icon={<CheckCircle2 size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label="مبيعات اليوم"         value={fmtAmt((kpis?.todaySalesHalalas ?? 0)/100)}  sub="ر.س"              icon={<TrendingUp size={18} className="text-purple-600"/>} accent="purple"/>
+        <KpiCard label="فروق كاش للمراجعة"   value={String(kpis?.cashGapsPendingReview ?? 0)}    sub="تحتاج مراجعة"     icon={<AlertTriangle size={18} className="text-amber-600"/>} accent="amber"/>
       </div>
 
       {/* Tabs */}
@@ -6088,41 +6128,48 @@ function AccShifts({ navigate, setModal }:PageProps) {
             <div className="bg-red-50 border border-red-200 rounded-xl p-3.5 flex items-start gap-3" dir="rtl">
               <AlertTriangle size={16} className="text-red-600 flex-shrink-0 mt-0.5"/>
               <div>
-                <p className="text-sm font-bold text-red-800">⚠️ تنبيه: {overdueShifts.length} شفت متأخر أكثر من 8 ساعات</p>
+                <p className="text-sm font-bold text-red-800">⚠️ تنبيه: {overdueShifts.length} شفت متأخر — انتهى وقته ولم يُغلق الصندوق بعد</p>
                 <p className="text-xs text-red-700 mt-1">
-                  {overdueShifts.map(s=>`${s.name} (${s.branch}) — ${s.duration}`).join(" · ")} — يُرجى إغلاق الشفت فوراً.
+                  {overdueShifts.map(s=>`${s.cashierName} (${s.branchName})`).join(" · ")} — يُرجى إغلاق الشفت فوراً.
                 </p>
               </div>
             </div>
           )}
+          {liveShifts.length===0 && <p className="text-center text-gray-400 text-sm py-8">لا توجد شفتات مفتوحة حالياً</p>}
           <div className="grid grid-cols-2 gap-4">
-          {liveShifts.map((sh,i)=>(
-            <div key={i} className={`bg-white rounded-xl border shadow-sm p-4 ${sh.durationHrs>8?"border-red-300 bg-red-50/20":sh.status==="late"?"border-amber-300 bg-amber-50/20":"border-gray-100"}`}>
-              {sh.durationHrs>8 && <div className="flex items-center gap-2 text-red-700 text-xs font-semibold mb-3 bg-red-100 rounded-lg px-3 py-2"><AlertTriangle size={13}/> شفت متأخر — {sh.durationHrs.toFixed(0)} ساعة بدون إغلاق! يتجاوز الحد المسموح به</div>}
-              {sh.durationHrs<=8 && sh.status==="late" && <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold mb-3 bg-amber-100 rounded-lg px-3 py-2"><AlertTriangle size={13}/> انتهى وقت الشفت — لم يُغلق الصندوق بعد</div>}
+          {liveShifts.map(sh=>{
+            const durHrs = shiftDurHrs(sh);
+            const late = sh.status==="late" || sh.isLate;
+            return (
+            <div key={sh.id} className={`bg-white rounded-xl border shadow-sm p-4 ${durHrs>8?"border-red-300 bg-red-50/20":late?"border-amber-300 bg-amber-50/20":"border-gray-100"}`}>
+              {durHrs>8 && <div className="flex items-center gap-2 text-red-700 text-xs font-semibold mb-3 bg-red-100 rounded-lg px-3 py-2"><AlertTriangle size={13}/> شفت متأخر — {durHrs.toFixed(0)} ساعة بدون إغلاق! يتجاوز الحد المسموح به</div>}
+              {durHrs<=8 && late && <div className="flex items-center gap-2 text-amber-700 text-xs font-semibold mb-3 bg-amber-100 rounded-lg px-3 py-2"><AlertTriangle size={13}/> {sh.lateBannerAr ?? "انتهى وقت الشفت — لم يُغلق الصندوق بعد"}</div>}
               <div className="flex items-center gap-3 mb-3">
                 <div className="relative">
-                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm">{sh.name[0]}</div>
-                  <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${sh.status==="late"?"bg-amber-500":"bg-emerald-500"}`}/>
+                  <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm">{(sh.cashierName||"؟")[0]}</div>
+                  <span className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-white ${late?"bg-amber-500":"bg-emerald-500"}`}/>
                 </div>
-                <div className="flex-1"><p className="font-bold text-gray-800 text-sm">{sh.name}</p><p className="text-xs text-gray-500">{sh.role} · {sh.branch}</p></div>
-                <Badge className={sh.status==="late"?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}>{sh.status==="late"?"تأخير":"نشط"}</Badge>
+                <div className="flex-1"><p className="font-bold text-gray-800 text-sm">{sh.cashierName}</p><p className="text-xs text-gray-500">{sh.shiftType} · {sh.branchName}</p></div>
+                <Badge className={late?"bg-amber-100 text-amber-700":"bg-emerald-100 text-emerald-700"}>{sh.statusLabelAr ?? (late?"تأخير":"نشط")}</Badge>
               </div>
               <div className="grid grid-cols-3 gap-2 mb-3 text-center">
-                {[{label:"بداية الشفت",val:sh.start},{label:"المدة",val:sh.duration},{label:"الطلبات",val:String(sh.orders)}].map((s,j)=>(
+                {[{label:"بداية الشفت",val:fmtTime(sh.startedAt)},{label:"المدة",val:`${durHrs.toFixed(1)} ساعة`},{label:"الطلبات",val:String(sh.ordersCount??0)}].map((s,j)=>(
                   <div key={j} className="bg-gray-50 rounded-lg p-2"><p className="text-[10px] text-gray-400">{s.label}</p><p className="text-sm font-bold text-gray-800">{s.val}</p></div>
                 ))}
               </div>
               <div className="flex items-center justify-between text-sm mb-3">
                 <span className="text-gray-500 text-xs">مبيعات الشفت</span>
-                <span className="font-bold text-purple-700">{fmtAmt(sh.sales)} ر.س</span>
+                <span className="font-bold text-purple-700">{fmtAmt((sh.salesHalalas??0)/100)} ر.س</span>
               </div>
               <div className="flex gap-2">
-                <button onClick={()=>setModal("contact")} className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"><Phone size={12}/> تواصل</button>
-                <button onClick={()=>setTab("close")} className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"><Lock size={12}/> إغلاق الشفت</button>
+                {sh.cashierPhone
+                  ? <a href={`tel:${sh.cashierPhone}`} className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"><Phone size={12}/> تواصل</a>
+                  : <button onClick={()=>setModal("contact")} className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-50"><Phone size={12}/> تواصل</button>}
+                <button onClick={()=>{setCloseForm(p=>({...p,shiftId:sh.id})); setTab("close");}} className="flex-1 flex items-center justify-center gap-1.5 text-xs py-2 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"><Lock size={12}/> إغلاق الشفت</button>
               </div>
             </div>
-          ))}
+            );
+          })}
           </div>
         </div>
       )}
@@ -6301,7 +6348,7 @@ function AccShifts({ navigate, setModal }:PageProps) {
         </div>
       )}
 
-      {/* ── TAB: CLOSE ────────────────────────────────────────────────────────── */}
+      {/* ── TAB: CLOSE (T08 §5 — expected cash server-derived; goes to pending_review + SHF- op) ── */}
       {tab==="close" && (
         <div className="max-w-xl mx-auto">
           <Card title="🔒 إغلاق الشفت">
@@ -6309,39 +6356,54 @@ function AccShifts({ navigate, setModal }:PageProps) {
               {closeSent ? (
                 <div className="text-center py-8">
                   <div className="text-4xl mb-3">✅</div>
-                  <p className="font-bold text-emerald-700">تم إغلاق الشفت بنجاح</p>
-                  <p className="text-sm text-gray-500 mt-1">سيتم توجيهك لسجل الشفتات...</p>
+                  <p className="font-bold text-emerald-700">تم إغلاق الشفت وإرساله للمراجعة</p>
+                  <p className="text-sm text-gray-500 mt-1">رقم العملية: <span className="font-mono font-bold text-gray-700">{closeSent}</span></p>
+                  <p className="text-xs text-gray-400 mt-1">بانتظار اعتماد المحاسب ثم الاعتماد النهائي من رئيس الحسابات — سيتم توجيهك لسجل الشفتات...</p>
                 </div>
               ) : (
                 <>
                   <div>
-                    <label className="text-[11px] font-semibold text-gray-500 block mb-1">الفرع</label>
-                    <select value={closeForm.branch} onChange={e=>setCloseForm(p=>({...p,branch:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-                      {BRANCHES.map(b=><option key={b}>{b}</option>)}
+                    <label className="text-[11px] font-semibold text-gray-500 block mb-1">الشفت المفتوح</label>
+                    <select value={closeForm.shiftId} onChange={e=>setCloseForm(p=>({...p,shiftId:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+                      <option value="">— اختر شفتاً مفتوحاً —</option>
+                      {liveShifts.map(s=><option key={s.id} value={s.id}>{s.branchName} · {s.shiftType} · {s.cashierName}</option>)}
                     </select>
+                    {liveShifts.length===0 && <p className="text-[11px] text-gray-400 mt-1">لا توجد شفتات مفتوحة للإغلاق حالياً.</p>}
                   </div>
+                  {closeShift && (
+                    <div className="p-3 rounded-xl bg-purple-50 border border-purple-200 flex justify-between items-center">
+                      <span className="text-sm font-semibold text-purple-800">النقد المتوقع (محسوب من النظام)</span>
+                      <span className="font-mono font-black text-lg text-purple-700">{fmtAmt(expectedH/100)} ر.س</span>
+                    </div>
+                  )}
                   <div>
                     <label className="text-[11px] font-semibold text-gray-500 block mb-1">النقد الفعلي في الصندوق (ر.س)</label>
-                    <input type="number" value={closeForm.cashInDrawer} onChange={e=>setCloseForm(p=>({...p,cashInDrawer:e.target.value}))} placeholder="أدخل المبلغ المعدود..." className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
+                    <input type="number" value={closeForm.cashActual} onChange={e=>setCloseForm(p=>({...p,cashActual:e.target.value}))} placeholder="أدخل المبلغ المعدود..." className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
                   </div>
-                  <div>
-                    <label className="text-[11px] font-semibold text-gray-500 block mb-1">المبيعات النقدية (من النظام) (ر.س)</label>
-                    <input type="number" value={closeForm.salesSystem} onChange={e=>setCloseForm(p=>({...p,salesSystem:e.target.value}))} placeholder="من تقرير الكاشير..." className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-semibold text-gray-500 block mb-1">إجمالي الشبكة (ر.س)</label>
+                      <input type="number" value={closeForm.cardTotal} onChange={e=>setCloseForm(p=>({...p,cardTotal:e.target.value}))} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-gray-500 block mb-1">تطبيقات التوصيل (ر.س)</label>
+                      <input type="number" value={closeForm.aggTotal} onChange={e=>setCloseForm(p=>({...p,aggTotal:e.target.value}))} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
+                    </div>
                   </div>
-                  {closeForm.cashInDrawer && closeForm.salesSystem && (
-                    <div className={`p-3 rounded-xl border ${cashDiff===0?"bg-emerald-50 border-emerald-200":cashDiff>0?"bg-blue-50 border-blue-200":"bg-red-50 border-red-200"}`}>
+                  {cashDiffH!==null && (
+                    <div className={`p-3 rounded-xl border ${cashDiffH===0?"bg-emerald-50 border-emerald-200":cashDiffH>0?"bg-blue-50 border-blue-200":"bg-red-50 border-red-200"}`}>
                       <div className="flex justify-between items-center">
                         <span className="text-sm font-semibold text-gray-700">الفرق (عجز/زيادة)</span>
-                        <span className={`font-mono font-black text-lg ${cashDiff===0?"text-emerald-700":cashDiff>0?"text-blue-700":"text-red-700"}`}>{cashDiff>0?"+":""}{fmtAmt(cashDiff)} ر.س {cashDiff===0?"✅":cashDiff>0?"⬆":"⬇"}</span>
+                        <span className={`font-mono font-black text-lg ${cashDiffH===0?"text-emerald-700":cashDiffH>0?"text-blue-700":"text-red-700"}`}>{cashDiffH>0?"+":""}{fmtAmt(cashDiffH/100)} ر.س {cashDiffH===0?"✅":cashDiffH>0?"⬆":"⬇"}</span>
                       </div>
-                      <p className="text-[11px] mt-1 text-gray-500">{cashDiff===0?"مطابق تاماً":cashDiff>0?"زيادة في الصندوق — تحتاج توثيق":"نقص في الصندوق — يُحمَّل على المشرف"}</p>
+                      <p className="text-[11px] mt-1 text-gray-500">{cashDiffH===0?"مطابق تاماً — لا خصم":cashDiffH>0?"زيادة في الصندوق — لا خصم":"عجز نقدي — يُحمَّل على الكاشير عند الاعتماد النهائي ما لم يُوزَّع"}</p>
                     </div>
                   )}
                   <div>
                     <label className="text-[11px] font-semibold text-gray-500 block mb-1">ملاحظات (اختياري)</label>
                     <textarea value={closeForm.notes} onChange={e=>setCloseForm(p=>({...p,notes:e.target.value}))} placeholder="ملاحظات الشفت..." rows={3} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 resize-none"/>
                   </div>
-                  <Btn variant="success" className="w-full justify-center" onClick={submitClose} disabled={!closeForm.cashInDrawer||!closeForm.salesSystem}><Lock size={14}/> تأكيد إغلاق الشفت</Btn>
+                  <Btn variant="success" className="w-full justify-center" onClick={submitClose} disabled={!closeForm.shiftId||closeForm.cashActual===""||closeShiftMut.isPending}><Lock size={14}/> {closeShiftMut.isPending?"جارٍ الإغلاق...":"تأكيد إغلاق الشفت"}</Btn>
                 </>
               )}
             </div>
@@ -6349,14 +6411,21 @@ function AccShifts({ navigate, setModal }:PageProps) {
         </div>
       )}
 
-      {/* ── TAB: HISTORY ──────────────────────────────────────────────────────── */}
+      {/* ── TAB: HISTORY (T08 §3/§7 — canonical shape + Excel export) ──────────── */}
       {tab==="history" && (
         <Card title="سجل الشفتات السابقة">
+          <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-end">
+            <button onClick={()=>exportShiftsMut.mutate({})} disabled={exportShiftsMut.isPending}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100 disabled:opacity-50">
+              <FileText size={11}/> {exportShiftsMut.isPending?"جارٍ التصدير...":"تصدير Excel"}
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm" dir="rtl">
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr className="text-xs text-gray-500">
-                  <th className="px-4 py-3 text-right">الفرع / المشرف</th>
+                  <th className="px-4 py-3 text-right">الفرع / الكاشير</th>
+                  <th className="px-4 py-3 text-center">نوع الشفت</th>
                   <th className="px-4 py-3 text-center">التاريخ</th>
                   <th className="px-4 py-3 text-center">بداية → نهاية</th>
                   <th className="px-4 py-3 text-center">الطلبات</th>
@@ -6366,25 +6435,32 @@ function AccShifts({ navigate, setModal }:PageProps) {
                 </tr>
               </thead>
               <tbody>
-                {shiftHistory.map((sh,i)=>(
-                  <tr key={i} className="border-b border-gray-50 hover:bg-gray-50/60 last:border-0">
-                    <td className="px-4 py-3"><p className="font-semibold text-gray-800 text-xs">{sh.branch}</p><p className="text-[10px] text-gray-400">{sh.supervisor}</p></td>
-                    <td className="px-4 py-3 text-center text-gray-500 text-xs">{sh.date}</td>
-                    <td className="px-4 py-3 text-center font-mono text-xs text-gray-600">{sh.startT} → {sh.endT}</td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-800">{sh.orders}</td>
-                    <td className="px-4 py-3 text-center font-mono font-bold text-purple-700">{fmtAmt(sh.sales)} ر.س</td>
+                {shiftHistory.length===0 && (
+                  <tr><td colSpan={8} className="text-center text-gray-400 text-sm py-8">لا يوجد سجل شفتات بعد</td></tr>
+                )}
+                {shiftHistory.map(sh=>{
+                  const diffH = sh.varianceHalalas ?? 0;
+                  return (
+                  <tr key={sh.id} className="border-b border-gray-50 hover:bg-gray-50/60 last:border-0">
+                    <td className="px-4 py-3"><p className="font-semibold text-gray-800 text-xs">{sh.branchName}</p><p className="text-[10px] text-gray-400">{sh.cashierName}</p></td>
+                    <td className="px-4 py-3 text-center"><Badge className="bg-gray-100 text-gray-600 text-[10px]">{sh.shiftType}</Badge></td>
+                    <td className="px-4 py-3 text-center text-gray-500 text-xs">{fmtDate(sh.endedAt)}</td>
+                    <td className="px-4 py-3 text-center font-mono text-xs text-gray-600">{fmtTime(sh.startedAt)} → {fmtTime(sh.endedAt)}</td>
+                    <td className="px-4 py-3 text-center font-bold text-gray-800">{sh.ordersCount??0}</td>
+                    <td className="px-4 py-3 text-center font-mono font-bold text-purple-700">{fmtAmt((sh.salesHalalas??0)/100)} ر.س</td>
                     <td className="px-4 py-3 text-center">
-                      <span className={`font-mono font-bold text-sm ${sh.diff===0?"text-emerald-600":sh.diff>0?"text-blue-600":"text-red-600"}`}>{sh.diff>0?"+":""}{sh.diff} ر.س</span>
+                      <span className={`font-mono font-bold text-sm ${diffH===0?"text-emerald-600":diffH>0?"text-blue-600":"text-red-600"}`}>{diffH>0?"+":""}{fmtAmt(diffH/100)} ر.س</span>
                     </td>
-                    <td className="px-4 py-3 text-center"><Badge className="bg-emerald-50 text-emerald-700">مُغلق</Badge></td>
+                    <td className="px-4 py-3 text-center"><Badge className="bg-emerald-50 text-emerald-700">{sh.statusLabelAr ?? "مغلق"}</Badge></td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               <tfoot className="bg-gray-50/80 border-t border-gray-200">
                 <tr>
-                  <td className="px-4 py-2.5 font-bold text-gray-700 text-xs" colSpan={3}>إجمالي الأسبوع</td>
-                  <td className="px-4 py-2.5 text-center font-bold text-gray-800">{shiftHistory.reduce((s,sh)=>s+sh.orders,0)}</td>
-                  <td className="px-4 py-2.5 text-center font-mono font-black text-purple-700">{fmtAmt(shiftHistory.reduce((s,sh)=>s+sh.sales,0))} ر.س</td>
+                  <td className="px-4 py-2.5 font-bold text-gray-700 text-xs" colSpan={4}>الإجمالي</td>
+                  <td className="px-4 py-2.5 text-center font-bold text-gray-800">{shiftHistory.reduce((s,sh)=>s+(sh.ordersCount??0),0)}</td>
+                  <td className="px-4 py-2.5 text-center font-mono font-black text-purple-700">{fmtAmt(shiftHistory.reduce((s,sh)=>s+(sh.salesHalalas??0),0)/100)} ر.س</td>
                   <td colSpan={2}/>
                 </tr>
               </tfoot>
@@ -6396,130 +6472,338 @@ function AccShifts({ navigate, setModal }:PageProps) {
   );
 }
 
-function AccEmployees({ navigate, setModal }:PageProps) {
-  const { data: apiEmployees } = usePlatformEmployees();
-  const exportPayrollMut = useExportPayroll();
-  const [selectedIdx, setSelectedIdx] = useState<number>(0);
-  const [empFilter, setEmpFilter] = useState({empNum:"", branch:"", brand:""});
-  // Employees come from the platform API; empty until the backend returns them (no static seed).
-  const EMPLOYEES_FALLBACK: any[] = [];
-  const employees = ((apiEmployees as any)?.data?.length > 0 ? (apiEmployees as any).data : []) as any[];
-  const emp = employees[selectedIdx] ?? { name:"", role:"", branch:"", balance:0, movements:[] as {date:string;desc:string;type:string;amt:number}[] };
-  const totalCredit = emp.movements.filter((m:any)=>m.type==="credit").reduce((s:number,m:any)=>s+m.amt,0);
-  const totalDebit = emp.movements.filter((m:any)=>m.type==="debit").reduce((s:number,m:any)=>s+m.amt,0);
+// Manual movement categories postable via T09 §A3.
+const ASAB_EMP_CATEGORIES: { key:string; labelAr:string; defaultType:"credit"|"debit" }[] = [
+  { key:"advance",           labelAr:"سلفة",        defaultType:"debit"  },
+  { key:"deduction",         labelAr:"خصم",         defaultType:"debit"  },
+  { key:"absence",           labelAr:"غياب",        defaultType:"debit"  },
+  { key:"receipts_shortage", labelAr:"نقص إيصالات", defaultType:"debit"  },
+  { key:"bonus",             labelAr:"مكافأة",      defaultType:"credit" },
+];
 
-  const filteredEmps = employees.filter(e=>{
-    if(empFilter.empNum && !e.name.includes(empFilter.empNum)) return false;
-    if(empFilter.branch && empFilter.branch!=="الكل" && !e.branch.includes(empFilter.branch.replace("الكل",""))) return false;
-    return true;
-  });
-
+// «إضافة حركة» modal (T09 §A3) — POST /accountant/employees/{id}/movements.
+function AsabEmpMovementModal({ employeeId, employeeName, onClose }:{ employeeId:string; employeeName:string; onClose:()=>void }) {
+  const createMut = useCreateEmployeeMovement();
+  const [category, setCategory] = useState("advance");
+  const [movementType, setType] = useState<"credit"|"debit">("debit");
+  const [amount, setAmount]     = useState("");
+  const [description, setDesc]  = useState("");
+  const [date, setDate]         = useState("");
+  const pick = (k:string) => { setCategory(k); const c=ASAB_EMP_CATEGORIES.find(x=>x.key===k); if(c) setType(c.defaultType); };
+  const amountH = Math.round((parseFloat(amount)||0)*100);
+  const submit = () => {
+    if(amountH<1 || !description.trim()) return;
+    createMut.mutate({ employeeId, payload:{ movementType, amount:amountH, category, description:description.trim(), date:date||undefined } }, { onSuccess:()=>onClose() });
+  };
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-gray-800">كشف حساب الموظفين</h2>
-          <p className="text-gray-400 text-sm mt-0.5">{filteredEmps.length} موظف {filteredEmps.length!==employees.length?`(من ${employees.length})`:""}</p>
-        </div>
-      </div>
-
-      {/* Filter bar */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir="rtl">
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">رقم الموظف / الاسم</label>
-            <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
-              <Search size={13} className="text-gray-400 flex-shrink-0"/>
-              <input value={empFilter.empNum} onChange={e=>setEmpFilter(p=>({...p,empNum:e.target.value}))} placeholder="ابحث باسم أو رقم الموظف..." className="flex-1 text-sm outline-none"/>
-            </div>
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir="rtl">
+        <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">إضافة حركة — {employeeName}</h3><button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18}/></button></div>
+        <div className="space-y-3">
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">التصنيف</label>
+            <select value={category} onChange={e=>pick(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">{ASAB_EMP_CATEGORIES.map(c=><option key={c.key} value={c.key}>{c.labelAr}</option>)}</select></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">النوع</label>
+              <select value={movementType} onChange={e=>setType(e.target.value as "credit"|"debit")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"><option value="debit">مدين (على الموظف)</option><option value="credit">دائن (للموظف)</option></select></div>
+            <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">المبلغ (ر.س)</label>
+              <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/></div>
           </div>
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">الفرع</label>
-            <select value={empFilter.branch} onChange={e=>{ setEmpFilter(p=>({...p,branch:e.target.value})); setSelectedIdx(0); }} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل",...[...new Set(employees.map(e=>e.branch))]].map(b=><option key={b}>{b}</option>)}
-            </select>
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">البيان</label>
+            <input value={description} onChange={e=>setDesc(e.target.value)} placeholder="وصف الحركة..." className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"/></div>
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">التاريخ (اختياري)</label>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"/></div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">إلغاء</button>
+            <Btn variant="primary" onClick={submit} disabled={amountH<1||!description.trim()||createMut.isPending}><Plus size={11}/> تسجيل الحركة</Btn>
           </div>
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">العلامة التجارية</label>
-            <select value={empFilter.brand} onChange={e=>setEmpFilter(p=>({...p,brand:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل"].map(b=><option key={b}>{b}</option>)}
-            </select>
-          </div>
-        </div>
-        {(empFilter.empNum||empFilter.branch||empFilter.brand) && (
-          <button onClick={()=>setEmpFilter({empNum:"",branch:"",brand:""})} className="mt-2 text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> مسح الفلاتر</button>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-5">
-        <Card title={`قائمة الموظفين (${filteredEmps.length})`}>
-          <div className="divide-y divide-gray-100">
-            {filteredEmps.length===0 && <EmptyState icon="🔍" title="لا نتائج" desc="لا يوجد موظفون يطابقون الفلاتر المحددة"/>}
-            {filteredEmps.map((e,i)=>{
-              const realIdx = employees.indexOf(e);
-              return (
-              <button key={i} onClick={()=>setSelectedIdx(realIdx)} className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-right ${selectedIdx===realIdx?"bg-purple-50/50":""}`}>
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">{e.name[0]}</div>
-                <div className="flex-1 min-w-0"><p className="font-semibold text-sm text-gray-800">{e.name}</p><p className="text-xs text-gray-400">{e.role} · {e.branch}</p></div>
-                <span className={`font-mono font-bold text-sm ${e.balance>=0?"text-emerald-600":"text-red-600"}`}>{e.balance>=0?"+":""}{e.balance} ر.س</span>
-              </button>
-              );
-            })}
-          </div>
-        </Card>
-        <div className="space-y-4">
-          <Card title={`كشف حساب: ${emp.name}`} actions={
-            <div className="flex gap-2">
-              <button onClick={()=>exportPayrollMut.mutate(new Date().toISOString().slice(0,7))}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100 transition-all">
-                <FileText size={11}/> Excel
-              </button>
-              <button onClick={()=>window.print()} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-xs font-semibold hover:bg-blue-100 transition-all">
-                <Printer size={11}/> طباعة
-              </button>
-              <Btn size="sm"><Download size={12}/> PDF</Btn>
-              <button onClick={()=>setModal("contact")} className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center gap-1"><Phone size={11}/> تواصل</button>
-            </div>
-          }>
-            <div className="p-4">
-              <div className="bg-gray-50 rounded-xl p-3 mb-4 grid grid-cols-3 gap-3 text-center">
-                <div><p className="text-[10px] text-gray-400">الرصيد</p><p className={`font-bold text-base ${emp.balance>=0?"text-emerald-600":"text-red-600"}`}>{emp.balance>=0?"+":""}{emp.balance} ر.س</p></div>
-                <div><p className="text-[10px] text-gray-400">إجمالي الدائن</p><p className="font-bold text-emerald-600">+{fmtAmt(totalCredit)} ر.س</p></div>
-                <div><p className="text-[10px] text-gray-400">إجمالي المدين</p><p className="font-bold text-red-600">-{fmtAmt(totalDebit)} ر.س</p></div>
-              </div>
-              <div className="space-y-2">
-                {emp.movements.map((m:any,i:number)=>(
-                  <div key={i} className="flex items-center gap-3 py-2 border-b border-gray-50 last:border-0">
-                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 ${m.type==="credit"?"bg-emerald-50":"bg-red-50"}`}>{m.type==="credit"?"⬆":"⬇"}</div>
-                    <div className="flex-1"><p className="text-xs font-medium text-gray-700">{m.desc}</p><p className="text-[10px] text-gray-400">{m.date} 2025</p></div>
-                    <span className={`font-mono font-bold text-sm ${m.type==="credit"?"text-emerald-600":"text-red-600"}`}>{m.type==="credit"?"+":"-"}{fmtAmt(m.amt)} ر.س</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
         </div>
       </div>
     </div>
   );
 }
 
+function AccEmployees({ setModal }:PageProps) {
+  const [selectedId, setSelectedId] = useState<string|null>(null);
+  const [empFilter, setEmpFilter]   = useState({q:"", branchId:""});
+  const [month, setMonth]           = useState("");
+  const [showAdd, setShowAdd]       = useState(false);
+
+  const { data: employeesPage } = useEmployees({ q: empFilter.q || undefined, branchId: empFilter.branchId || undefined });
+  const { data: statement } = useEmployeeMovements(selectedId, month || undefined);
+  const settleMut          = useSettleEmployeeBalance();
+  const exportStatementMut = useExportEmployeeStatement();
+  const exportPayrollMut   = useExportPayroll();
+
+  const employees = employeesPage?.data ?? [];
+  const emp = selectedId ? employees.find(e=>e.id===selectedId) : undefined;
+  const balColor = (h:number) => h<0?"text-red-600":h>0?"text-emerald-600":"text-gray-400";
+  const bal = statement?.balanceHalalas ?? emp?.balanceHalalas ?? 0;
+
+  const doSettle = () => { if(selectedId) settleMut.mutate({ employeeId:selectedId }); };
+
+  return (
+    <div className="space-y-5">
+      {showAdd && emp && <AsabEmpMovementModal employeeId={emp.id} employeeName={emp.name} onClose={()=>setShowAdd(false)}/>}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">كشف حساب الموظفين</h2>
+          <p className="text-gray-400 text-sm mt-0.5">{employees.length} موظف</p>
+        </div>
+        <button onClick={()=>exportPayrollMut.mutate(new Date().toISOString().slice(0,7))}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><Download size={12}/> كشف الرواتب Excel</button>
+      </div>
+
+      {/* Filter bar */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir="rtl">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">اسم الموظف</label>
+            <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
+              <Search size={13} className="text-gray-400 flex-shrink-0"/>
+              <input value={empFilter.q} onChange={e=>setEmpFilter(p=>({...p,q:e.target.value}))} placeholder="ابحث باسم الموظف..." className="flex-1 text-sm outline-none"/>
+            </div>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">الفرع</label>
+            <select value={empFilter.branchId} onChange={e=>{ setEmpFilter(p=>({...p,branchId:e.target.value})); setSelectedId(null); }} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+              <option value="">كل الفروع</option>
+              {[...new Map(employees.map(e=>[e.branchId,e.branchName])).entries()].map(([id,name])=><option key={id} value={id}>{name}</option>)}
+            </select>
+          </div>
+        </div>
+        {(empFilter.q||empFilter.branchId) && (
+          <button onClick={()=>setEmpFilter({q:"",branchId:""})} className="mt-2 text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> مسح الفلاتر</button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-2 gap-5 items-start">
+        <Card title={`قائمة الموظفين (${employees.length})`}>
+          <div className="divide-y divide-gray-100">
+            {employees.length===0 && <EmptyState icon="🔍" title="لا نتائج" desc="لا يوجد موظفون"/>}
+            {employees.map(e=>(
+              <button key={e.id} onClick={()=>{ setSelectedId(selectedId===e.id?null:e.id); setMonth(""); }} className={`w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-right ${selectedId===e.id?"bg-purple-50/50":""} ${e.status!=="active"?"opacity-60":""}`}>
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">{e.name[0]}</div>
+                <div className="flex-1 min-w-0"><p className="font-semibold text-sm text-gray-800">{e.name}</p><p className="text-xs text-gray-400">{e.role} · {e.branchName}</p></div>
+                <div className="text-left flex-shrink-0">
+                  <p className={`font-mono font-bold text-sm ${balColor(e.balanceHalalas)}`}>{fmtAmt(e.balanceHalalas/100)} ر.س</p>
+                  <p className="text-[9px] text-gray-400">{e.balanceCaption?.labelAr}</p>
+                </div>
+              </button>
+            ))}
+          </div>
+        </Card>
+        <div className="space-y-4">
+          {!emp ? (
+            <Card title="كشف الحساب"><div className="p-8 text-center text-gray-400 text-sm">اختر موظفاً من القائمة لعرض كشف حسابه</div></Card>
+          ) : (
+          <Card title={`كشف حساب: ${emp.name}`} actions={
+            <div className="flex gap-2">
+              <button onClick={()=>setShowAdd(true)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 text-xs font-semibold hover:bg-purple-100"><Plus size={11}/> إضافة حركة</button>
+              <button onClick={doSettle} disabled={settleMut.isPending||bal===0} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100 disabled:opacity-40"><Check size={11}/> تسوية الرصيد</button>
+              <button onClick={()=>selectedId&&exportStatementMut.mutate({ employeeId:selectedId, month:month||undefined })} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> Excel</button>
+              <button onClick={()=>setModal("contact")} className="text-xs px-2 py-1 rounded border border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center gap-1"><Phone size={11}/> تواصل</button>
+            </div>
+          }>
+            <div className="p-4">
+              <div className="bg-gray-50 rounded-xl p-3 mb-3 grid grid-cols-4 gap-2 text-center">
+                <div><p className="text-[10px] text-gray-400">الراتب</p><p className="font-bold text-sm text-blue-700">{fmtAmt((emp.monthlySalary??0)/100)}</p></div>
+                <div><p className="text-[10px] text-gray-400">إجمالي الدائن</p><p className="font-bold text-emerald-600">+{fmtAmt((statement?.totalCredit??0)/100)}</p></div>
+                <div><p className="text-[10px] text-gray-400">إجمالي المدين</p><p className="font-bold text-red-600">-{fmtAmt((statement?.totalDebit??0)/100)}</p></div>
+                <div><p className="text-[10px] text-gray-400">الرصيد</p><p className={`font-bold text-base ${balColor(bal)}`}>{fmtAmt(bal/100)} ر.س</p></div>
+              </div>
+              {statement?.autoDeductFromSalary && (
+                <div className="mb-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+                  <AlertTriangle size={13} className="text-amber-600 flex-shrink-0"/>
+                  <p className="text-[11px] text-amber-800 font-semibold">سيتم خصم الرصيد السالب من الراتب القادم</p>
+                </div>
+              )}
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[11px] font-bold text-gray-500">سجل الحركات المالية</p>
+                <div className="flex items-center gap-2">
+                  <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="text-[11px] border border-gray-200 rounded-lg px-2 py-1"/>
+                  {month && <button onClick={()=>setMonth("")} className="text-[10px] text-purple-600 hover:underline">كل الفترات</button>}
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                {(statement?.movements ?? []).length===0 && <p className="text-center text-gray-400 text-xs py-4">لا توجد حركات في هذه الفترة</p>}
+                {(statement?.movements ?? []).map(m=>(
+                  <div key={m.id} className="flex items-center gap-3 py-2 border-b border-gray-50 last:border-0">
+                    <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 ${m.movementType==="credit"?"bg-emerald-50":"bg-red-50"}`}>{m.movementType==="credit"?"⬆":"⬇"}</div>
+                    <div className="flex-1 min-w-0"><p className="text-xs font-medium text-gray-700 truncate">{m.description}</p><p className="text-[10px] text-gray-400">{new Date(m.movementDate).toLocaleDateString("ar-SA")} · {m.categoryLabelAr} · {m.ref}</p></div>
+                    <div className="text-left flex-shrink-0">
+                      <span className={`font-mono font-bold text-sm ${m.movementType==="credit"?"text-emerald-600":"text-red-600"}`}>{m.movementType==="credit"?"+":"-"}{fmtAmt(m.amountHalalas/100)}</span>
+                      <p className={`text-[9px] font-mono ${balColor(m.runningBalanceHalalas)}`}>{fmtAmt(m.runningBalanceHalalas/100)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {statement && (
+                <div className="mt-3 pt-2 border-t border-gray-200 flex items-center justify-between text-xs">
+                  <span className="text-gray-500">{month?`رصيد أول المدة: ${fmtAmt((statement.openingBalanceHalalas??0)/100)} ر.س`:""}</span>
+                  <span className="font-bold text-gray-700">رصيد آخر المدة: <span className={`font-mono ${balColor(statement.closingBalanceHalalas)}`}>{fmtAmt((statement.closingBalanceHalalas??0)/100)} ر.س</span></span>
+                </div>
+              )}
+            </div>
+          </Card>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// «تعزيز / صرف» modal (T09 §B3).
+function AsabCashTxnModal({ custodyId, custodianName, remainingHalalas, onClose }:{ custodyId:string; custodianName:string; remainingHalalas:number; onClose:()=>void }) {
+  const createMut = useCreateCashTransaction();
+  const [txnType, setTxnType] = useState<"credit"|"debit">("credit");
+  const [amount, setAmount]   = useState("");
+  const [description, setDesc]= useState("");
+  const [fromTreasury, setFromTreasury] = useState(true);
+  const amountH = Math.round((parseFloat(amount)||0)*100);
+  const overdraw = txnType==="debit" && amountH>remainingHalalas;
+  const submit = () => {
+    if(amountH<1||overdraw) return;
+    createMut.mutate({ custodyId, payload:{ txnType, amount:amountH, description:description.trim()||undefined, source: txnType==="credit"&&fromTreasury?"treasury":"manual" } }, { onSuccess:()=>onClose() });
+  };
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir="rtl">
+        <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">حركة عهدة — {custodianName}</h3><button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18}/></button></div>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-2">
+            <button onClick={()=>setTxnType("credit")} className={`px-3 py-2.5 rounded-xl border text-xs font-bold ${txnType==="credit"?"bg-emerald-50 border-emerald-300 text-emerald-700":"border-gray-200 text-gray-500"}`}>⬆ تعزيز عهدة</button>
+            <button onClick={()=>setTxnType("debit")} className={`px-3 py-2.5 rounded-xl border text-xs font-bold ${txnType==="debit"?"bg-red-50 border-red-300 text-red-700":"border-gray-200 text-gray-500"}`}>⬇ صرف</button>
+          </div>
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">المبلغ (ر.س)</label>
+            <input type="number" value={amount} onChange={e=>setAmount(e.target.value)} placeholder="0.00" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 font-mono"/>
+            {overdraw && <p className="text-[10px] text-red-600 mt-1">المبلغ يتجاوز المتبقي ({fmtAmt(remainingHalalas/100)} ر.س)</p>}
+          </div>
+          <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">البيان (اختياري)</label>
+            <input value={description} onChange={e=>setDesc(e.target.value)} placeholder={txnType==="credit"?"تعزيز عهدة من الخزينة":"بيان الصرف..."} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2"/></div>
+          {txnType==="credit" && <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer"><input type="checkbox" checked={fromTreasury} onChange={e=>setFromTreasury(e.target.checked)}/> تعزيز من الخزينة</label>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">إلغاء</button>
+            <Btn variant="primary" onClick={submit} disabled={amountH<1||overdraw||createMut.isPending}><Check size={11}/> تسجيل</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// One expandable custody row + ledger + approve/reject + settle (T09 §B2/B4/B5).
+function AsabCustodyCard({ custody }:{ custody:any }) {
+  const [open, setOpen]   = useState(false);
+  const [month, setMonth] = useState("");
+  const [showTxn, setShowTxn] = useState(false);
+  const { data: ledger } = useCashTransactions(open ? custody.id : null, month || undefined);
+  const approveMut = useApproveCashTxn();
+  const rejectMut  = useRejectCashTxn();
+  const reqMut     = useRequestCashSettlement();
+  const settleMut  = useSettleCash();
+  const exportLedgerMut = useExportCashLedger();
+
+  const isLow = custody.status!=="normal";
+  const pct   = Math.round(custody.usagePct ?? 0);
+  const statusCls = custody.status==="critical" ? "bg-red-100 text-red-700 border-red-200"
+                  : custody.status==="low"      ? "bg-amber-100 text-amber-700 border-amber-200"
+                  : "bg-emerald-50 text-emerald-700 border-emerald-200";
+  const doReject = (txnId:string) => { const r=window.prompt("سبب الرفض؟")??""; if(r.trim()) rejectMut.mutate({ custodyId:custody.id, txnId, reason:r.trim() }); };
+  return (
+    <div className="border-b border-gray-100 last:border-0">
+      {showTxn && <AsabCashTxnModal custodyId={custody.id} custodianName={custody.custodianName} remainingHalalas={custody.remainingHalalas} onClose={()=>setShowTxn(false)}/>}
+      <div className={`px-5 py-4 flex items-center gap-4 hover:bg-gray-50/70 ${open?"bg-orange-50/20":""} ${isLow?"border-r-4 border-r-red-400":""}`}>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-gray-800 text-sm">{custody.branchName}</span>
+            <span className="text-gray-300">·</span>
+            <span className="text-xs text-gray-500">{custody.custodianName}</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${statusCls}`}>{custody.statusLabelAr}</span>
+            {custody.daysSinceSettlement>=30 && <span className="text-[10px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-bold">⏰ {custody.daysSinceSettlement} يوم بدون تسوية</span>}
+          </div>
+          <div className="flex items-center gap-3 mt-1.5">
+            <div className="flex-1 bg-gray-200 rounded-full h-1.5 max-w-32"><div className={`h-1.5 rounded-full ${pct>85?"bg-red-400":"bg-orange-400"}`} style={{width:`${Math.min(pct,100)}%`}}></div></div>
+            <span className="text-xs text-gray-400">{pct}% مُصرَف</span>
+            <span className={`text-xs font-bold font-mono ${isLow?"text-red-600":"text-emerald-600"}`}>{fmtAmt(custody.remainingHalalas/100)} ر.س متبقٍ</span>
+          </div>
+        </div>
+        <button onClick={()=>setShowTxn(true)} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold hover:bg-purple-100 flex-shrink-0"><Plus size={10}/> حركة</button>
+        <Btn size="sm" onClick={()=>setOpen(!open)}>{open?<ChevronUp size={12}/>:<ChevronDown size={12}/>} المعاملات</Btn>
+      </div>
+      {open && (
+        <div className="px-5 pb-4 bg-gray-50/30">
+          <div className="flex items-center justify-between mb-2 pt-2 gap-2 flex-wrap">
+            <p className="text-[11px] font-bold text-gray-500">سجل معاملات العهدة — {custody.custodianName}</p>
+            <div className="flex items-center gap-2">
+              <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="text-[11px] border border-gray-200 rounded-lg px-2 py-1"/>
+              <button onClick={()=>exportLedgerMut.mutate({ custodyId:custody.id, month:month||undefined })} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold hover:bg-emerald-100"><FileText size={10}/> Excel</button>
+              {custody.daysSinceSettlement>=30 && <button onClick={()=>reqMut.mutate({ custodyId:custody.id })} disabled={reqMut.isPending} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-50 text-amber-700 border border-amber-200 text-[10px] font-semibold hover:bg-amber-100"><Send size={10}/> طلب تسوية</button>}
+              <button onClick={()=>settleMut.mutate({ custodyId:custody.id })} disabled={settleMut.isPending} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold hover:bg-blue-100"><Check size={10}/> تسوية العهدة</button>
+            </div>
+          </div>
+          <div className="bg-white rounded-xl border border-gray-100 overflow-x-auto">
+            <table className="w-full text-xs" dir="rtl">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">التاريخ</th>
+                  <th className="px-3 py-2 text-right font-semibold text-gray-600">البيان</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">النوع</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">المبلغ</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">الرصيد</th>
+                  <th className="px-3 py-2 text-center font-semibold text-gray-600">الحالة</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {(ledger?.transactions ?? []).length===0 && <tr><td colSpan={6} className="text-center text-gray-400 py-6">لا توجد معاملات</td></tr>}
+                {(ledger?.transactions ?? []).map((tx)=>(
+                  <tr key={tx.id} className="hover:bg-gray-50">
+                    <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{new Date(tx.txnDate).toLocaleDateString("ar-SA")}</td>
+                    <td className="px-3 py-2 font-medium text-gray-800">{tx.description}</td>
+                    <td className="px-3 py-2 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${tx.txnType==="credit"?"bg-emerald-100 text-emerald-700":"bg-red-100 text-red-700"}`}>{tx.typeLabelAr}</span></td>
+                    <td className={`px-3 py-2 text-center font-mono font-bold ${tx.txnType==="credit"?"text-emerald-600":"text-red-600"}`}>{tx.txnType==="credit"?"+":"-"}{fmtAmt(tx.amountHalalas/100)}</td>
+                    <td className="px-3 py-2 text-center font-mono text-gray-600">{fmtAmt(tx.runningBalanceHalalas/100)}</td>
+                    <td className="px-3 py-2 text-center">
+                      {tx.status==="pending" ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <button onClick={()=>approveMut.mutate({ custodyId:custody.id, txnId:tx.id })} disabled={approveMut.isPending} className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100" title="اعتماد"><Check size={12}/></button>
+                          <button onClick={()=>doReject(tx.id)} disabled={rejectMut.isPending} className="p-1 rounded bg-red-50 text-red-600 hover:bg-red-100" title="رفض"><X size={12}/></button>
+                        </div>
+                      ) : (
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${tx.status==="approved"?"bg-emerald-50 text-emerald-700":"bg-red-50 text-red-700"}`}>{tx.status==="approved"?"معتمد":"مرفوض"}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-gray-50 border-t-2 border-gray-200">
+                <tr>
+                  <td colSpan={4} className="px-3 py-2 font-bold text-gray-700">الرصيد الحالي</td>
+                  <td className={`px-3 py-2 text-center font-black font-mono ${isLow?"text-red-600":"text-emerald-700"}`}>{fmtAmt((ledger?.custody.currentBalanceHalalas ?? custody.remainingHalalas)/100)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccCash({}: PageProps) {
-  const { t, lang, dir } = useLang();
-  const { data: apiCashCustody } = usePlatformCashCustody();
+  const { data: custodyPage } = useCashCustody();
   const exportCashMut = useExportCash();
-  const [expandedBranch, setExpandedBranch] = useState<string|null>(null);
-  const [searchTerm,     setSearchTerm]     = useState("");
-  const [statusFilter,   setStatusFilter]   = useState("");
-  const [settlementReqs, setSettlementReqs] = useState<Record<string,boolean>>({});
+  const [searchTerm,   setSearchTerm]   = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
-  // Cash-custody branches come from the platform API; empty until the backend returns them.
-  const BRANCHES_FALLBACK: any[] = [];
-  const branches = ((apiCashCustody as any)?.length > 0 ? apiCashCustody : []) as any[];
-  const overdueSettlement = branches.filter(b=>b.daysSinceSettlement>=30);
+  const custodies = custodyPage?.data ?? [];
+  const kpis = custodyPage?.meta.kpis;
+  const overdueSettlement = custodies.filter(c=>c.daysSinceSettlement>=30);
 
-  const filtered = branches.filter(b=>{
-    if(searchTerm && !b.branch.includes(searchTerm) && !b.custodian.includes(searchTerm)) return false;
+  const filtered = custodies.filter(c=>{
+    if(searchTerm && !c.branchName.includes(searchTerm) && !c.custodianName.includes(searchTerm)) return false;
+    if(statusFilter==="قريبة من النفاد" && c.status==="normal") return false;
+    if(statusFilter==="حرجة" && c.status!=="critical") return false;
     return true;
   });
 
@@ -6527,12 +6811,13 @@ function AccCash({}: PageProps) {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-800">إدارة العهد النقدية</h2>
+        <button onClick={()=>exportCashMut.mutate({})} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={12}/> ملخص العهد Excel</button>
       </div>
 
       <div className="grid grid-cols-4 gap-4">
-        <KpiCard label="عدد العهود النشطة" value={String(branches.length)} sub="فروع لديها عهدة مفتوحة" icon={<ArrowLeftRight size={18} className="text-orange-600"/>} accent="orange"/>
-        <KpiCard label="طلبات صرف معلقة" value={String(branches.reduce((s,b)=>s+b.pendingTxns,0))} sub="بانتظار المراجعة والموافقة" icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label="عهود قريبة من النفاد" value={String(branches.filter(b=>b.amount-b.used<500).length)} sub="أقل من 500 ر.س متبقٍ" icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
+        <KpiCard label="عدد العهود النشطة" value={String(kpis?.activeCustodies ?? custodies.length)} sub="فروع لديها عهدة" icon={<ArrowLeftRight size={18} className="text-orange-600"/>} accent="orange"/>
+        <KpiCard label="طلبات صرف معلقة" value={String(kpis?.pendingRequests ?? 0)} sub="بانتظار المراجعة والموافقة" icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
+        <KpiCard label="عهود قريبة من النفاد" value={String(kpis?.nearDepletion ?? 0)} sub="أقل من 500 ر.س متبقٍ" icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
         <KpiCard label="تسويات متأخرة" value={String(overdueSettlement.length)} sub="+30 يوم بدون تسوية" icon={<Clock size={18} className="text-red-600"/>} accent="red"/>
       </div>
       {overdueSettlement.length>0 && (
@@ -6540,134 +6825,39 @@ function AccCash({}: PageProps) {
           <AlertTriangle size={15} className="text-red-600 flex-shrink-0 mt-0.5"/>
           <div className="flex-1">
             <p className="text-sm font-bold text-red-800">تنبيه: {overdueSettlement.length} عهدة لم تُسوَّ منذ أكثر من 30 يوماً</p>
-            <p className="text-xs text-red-700 mt-0.5">{overdueSettlement.map(b=>`${b.branch} (${b.daysSinceSettlement} يوم)`).join(" · ")}</p>
+            <p className="text-xs text-red-700 mt-0.5">{overdueSettlement.map(c=>`${c.branchName} (${c.daysSinceSettlement} يوم)`).join(" · ")}</p>
           </div>
         </div>
       )}
 
       {/* Filter bar */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4" dir="rtl">
-        <div className="grid grid-cols-3 gap-3 mb-3">
+        <div className="grid grid-cols-2 gap-3 mb-3">
           <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">بحث — الفرع أو المسؤول أو المطعم</label>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">بحث — الفرع أو أمين الصندوق</label>
             <div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2">
               <Search size={13} className="text-gray-400"/>
-              <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="اسم الفرع أو المطعم أو أمين الصندوق..." className="flex-1 text-sm outline-none"/>
+              <input value={searchTerm} onChange={e=>setSearchTerm(e.target.value)} placeholder="اسم الفرع أو أمين الصندوق..." className="flex-1 text-sm outline-none"/>
             </div>
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-gray-500 block mb-1">العلامة التجارية</label>
-            <select className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل"].map(b=><option key={b}>{b}</option>)}
-            </select>
           </div>
           <div>
             <label className="text-[11px] font-semibold text-gray-500 block mb-1">حالة العهدة</label>
             <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {["الكل","قريبة من النفاد","طلبات معلقة","نشطة"].map(s=><option key={s}>{s}</option>)}
+              {["الكل","قريبة من النفاد","حرجة"].map(s=><option key={s}>{s}</option>)}
             </select>
           </div>
         </div>
-        <div className="flex items-center justify-between">
-          {(searchTerm||statusFilter) && (
-            <button onClick={()=>{ setSearchTerm(""); setStatusFilter(""); }} className="text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> مسح الفلاتر</button>
-          )}
-          <button onClick={()=>exportCashMut.mutate({})}
-            className="mr-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100 transition-all">
-            <FileText size={11}/> تصدير Excel
-          </button>
-        </div>
+        {(searchTerm||statusFilter) && (
+          <button onClick={()=>{ setSearchTerm(""); setStatusFilter(""); }} className="text-xs text-purple-600 hover:underline flex items-center gap-1"><RotateCcw size={11}/> مسح الفلاتر</button>
+        )}
       </div>
 
-      {/* Custodian rows with click-to-expand transaction list */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <div className="px-5 py-3.5 bg-gray-50/60 border-b border-gray-100">
-          <p className="font-bold text-gray-900 text-sm">كشف العهود النقدية — اضغط على فرع لعرض سجل المعاملات</p>
+          <p className="font-bold text-gray-900 text-sm">كشف العهد النقدية — اضغط على فرع لعرض سجل المعاملات</p>
         </div>
-        {filtered.map((b,i)=>{
-          const rem    = b.amount - b.used;
-          const pct    = Math.round(b.used/b.amount*100);
-          const isLow  = rem < 500;
-          const isOpen = expandedBranch===b.branch;
-          return (
-            <div key={i} className="border-b border-gray-100 last:border-0">
-              {/* Summary row */}
-              <div className={`px-5 py-4 flex items-center gap-4 hover:bg-gray-50/70 ${isOpen?"bg-orange-50/20":""} ${isLow?"border-r-4 border-r-red-400":""}`}>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-semibold text-gray-800 text-sm">{b.branch}</span>
-                    <span className="text-gray-300">·</span>
-                    <span className="text-xs text-gray-500">{b.custodian}</span>
-                    {isLow && <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold border border-red-200">⚠ قريبة من النفاد</span>}
-                    {b.pendingTxns>0 && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">{b.pendingTxns} طلب معلق</span>}
-                    {b.daysSinceSettlement>=30
-                      ? <span className="text-[10px] bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold border border-red-200">⏰ {b.daysSinceSettlement} يوم بدون تسوية</span>
-                      : <span className="text-[10px] text-gray-400">آخر تسوية: {b.daysSinceSettlement} يوم</span>
-                    }
-                  </div>
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <div className="flex-1 bg-gray-200 rounded-full h-1.5 max-w-32">
-                      <div className={`h-1.5 rounded-full ${pct>85?"bg-red-400":"bg-orange-400"}`} style={{width:`${pct}%`}}></div>
-                    </div>
-                    <span className="text-xs text-gray-400">{pct}% مُصرَف</span>
-                    <span className={`text-xs font-bold font-mono ${isLow?"text-red-600":"text-emerald-600"}`}>{fmtAmt(rem)} ر.س متبقٍ</span>
-                  </div>
-                </div>
-                {b.daysSinceSettlement>=30 && (
-                  <button onClick={()=>setSettlementReqs(p=>({...p,[b.branch]:true}))}
-                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-semibold border transition-all flex-shrink-0 ${settlementReqs[b.branch]?"bg-emerald-50 text-emerald-700 border-emerald-200":"bg-red-50 text-red-700 border-red-200 hover:bg-red-100"}`}>
-                    {settlementReqs[b.branch]?<><CheckCircle2 size={11}/> {t("تم إرسال الطلب","Request Sent")}</>:<><Send size={11}/> {t("طلب تسوية","Request Settlement")}</>}
-                  </button>
-                )}
-                <Btn size="sm" onClick={()=>setExpandedBranch(isOpen?null:b.branch)}>
-                  {isOpen?<ChevronUp size={12}/>:<ChevronDown size={12}/>} المعاملات
-                </Btn>
-              </div>
-
-              {/* Transaction drill-down */}
-              {isOpen && (
-                <div className="px-5 pb-4 bg-gray-50/30">
-                  <p className="text-[11px] font-bold text-gray-500 mb-2 pt-2">سجل معاملات العهدة — {b.custodian}</p>
-                  <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-                    <table className="w-full text-xs" dir="rtl">
-                      <thead className="bg-gray-50">
-                        <tr>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-600">التاريخ</th>
-                          <th className="px-3 py-2 text-right font-semibold text-gray-600">البيان</th>
-                          <th className="px-3 py-2 text-center font-semibold text-gray-600">النوع</th>
-                          <th className="px-3 py-2 text-center font-semibold text-gray-600">المبلغ</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-50">
-                        {b.txns.map((t:any,k:number)=>(
-                          <tr key={k} className="hover:bg-gray-50">
-                            <td className="px-3 py-2 text-gray-500">{t.date}</td>
-                            <td className="px-3 py-2 font-medium text-gray-800">{t.desc}</td>
-                            <td className="px-3 py-2 text-center">
-                              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${t.type==="credit"?"bg-emerald-100 text-emerald-700":"bg-red-100 text-red-700"}`}>
-                                {t.type==="credit"?"إيداع":"صرف"}
-                              </span>
-                            </td>
-                            <td className={`px-3 py-2 text-center font-mono font-bold ${t.type==="credit"?"text-emerald-600":"text-red-600"}`}>
-                              {t.type==="credit"?"+":"-"}{fmtAmt(t.amt)} ر.س
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-gray-50 border-t-2 border-gray-200">
-                        <tr>
-                          <td colSpan={2} className="px-3 py-2 font-bold text-gray-700">الرصيد الحالي</td>
-                          <td></td>
-                          <td className={`px-3 py-2 text-center font-black font-mono ${isLow?"text-red-600":"text-emerald-700"}`}>{fmtAmt(rem)} ر.س</td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {filtered.length===0 && <p className="text-center text-gray-400 text-sm py-8">لا توجد عهد</p>}
+        {filtered.map(c=><AsabCustodyCard key={c.id} custody={c}/>)}
       </div>
     </div>
   );
@@ -8663,7 +8853,7 @@ function HeadApprovalTab({ ops, finalApproveOp, rejectOp, setModal, setDetailId,
   );
 }
 
-function HeadPending({ navigate, setModal, setDetailId, ops, finalApproveOp, rejectOp, bulkApprove }:PageProps) {
+function HeadPending({ navigate, setModal, setDetailId, ops, finalApproveOp, rejectOp, bulkApprove, returnForReview }:PageProps) {
   const { t, lang, dir } = useLang();
   const en = lang === "en";
   usePendingOperations();
@@ -8739,6 +8929,12 @@ function HeadPending({ navigate, setModal, setDetailId, ops, finalApproveOp, rej
               className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border font-semibold transition-all ${isCond?"bg-amber-100 text-amber-800 border-amber-300":"bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100"}`}>
               <AlertTriangle size={11}/> {t("مشروط","Conditional")}
             </button>
+            {returnForReview && (
+              <button onClick={()=>{ const note = window.prompt(t("ملاحظة الإرجاع (اختياري)","Return note (optional)")) ?? undefined; returnForReview(op.id, note || undefined); }}
+                className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 font-semibold hover:bg-blue-100">
+                <RotateCcw size={11}/> {t("إرجاع للمراجعة","Return")}
+              </button>
+            )}
             <div className="relative group">
               <button className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg border border-red-200 bg-red-50 text-red-700 font-semibold hover:bg-red-100">
                 <XCircle size={11}/> {t("رفض","Reject")}
@@ -9322,6 +9518,8 @@ function HeadERP({ ops, markErpPosted }:PageProps) {
   // B-H4: preflight checklist + previous batches log now come from the API.
   const { data: erpPreflight } = useErpPreflightPlatform();
   const { data: erpBatches } = useErpBatchesPlatform();
+  const retryBatchMut    = useRetryERPBatch();     // T10 §B3 — retry a failed batch
+  const downloadBatchMut = useDownloadERPBatch();  // T10 §B4 — json/csv/xlsx
   const { t, dir, lang } = useLang();
   const [step, setStep] = useState<0|1|2>(0);
   const [tab, setTab] = useState<"export"|"reports">("export");
@@ -9498,7 +9696,12 @@ function HeadERP({ ops, markErpPosted }:PageProps) {
               const bcount = h.operationCount ?? h.operationsCount ?? h.count ?? (Array.isArray(h.operationIds)?h.operationIds.length:0);
               const bamtHalalas = typeof h.totalAmount==="number" ? h.totalAmount : (typeof h.totalHalalas==="number" ? h.totalHalalas : null);
               const bamt = bamtHalalas != null ? Math.round(bamtHalalas/100).toLocaleString() : (h.total ?? h.amount ?? "—");
-              const bstatus = h.status ?? "success";
+              // T10 §B status enum: ready/exported/failed (legacy success/completed → exported).
+              const bstatus = h.status ?? "exported";
+              const isExported = bstatus==="exported"||bstatus==="success"||bstatus==="completed";
+              const isFailed   = bstatus==="failed";
+              const statusLabel = h.statusLabelAr ?? (isExported?t("تم التصدير لـ ERP","Exported"):isFailed?t("فشل التصدير","Failed"):t("جاهز للتصدير","Ready"));
+              const statusCls = isExported?"bg-emerald-100 text-emerald-700":isFailed?"bg-red-100 text-red-700":"bg-amber-100 text-amber-700";
               const bby = h.createdByName ?? h.by ?? "";
               return (
               <div key={i} className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-gray-50 border border-gray-100">
@@ -9506,10 +9709,19 @@ function HeadERP({ ops, markErpPosted }:PageProps) {
                 <span className="text-[11px] text-gray-400">{bdate ? new Date(bdate).toLocaleDateString("ar-SA") : ""}</span>
                 <span className="text-xs font-mono font-bold text-gray-700">{bcount} {t("عملية","ops")}</span>
                 <span className="text-xs font-mono font-bold text-gray-800">{bamt} {t("ر.س","SAR")}</span>
-                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${bstatus==="success"||bstatus==="completed"?"bg-emerald-100 text-emerald-700":"bg-amber-100 text-amber-700"}`}>
-                  {bstatus==="success"||bstatus==="completed"?`✓ ${t("مكتمل","Done")}`:`⚡ ${t("جزئي","Partial")}`}
-                </span>
-                <span className="text-[11px] text-gray-500">{bby}</span>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${statusCls}`}>{isExported?"✓ ":isFailed?"✕ ":"● "}{statusLabel}</span>
+                {bby && <span className="text-[11px] text-gray-500">{bby}</span>}
+                <div className="flex items-center gap-1">
+                  {isExported && (
+                    <>
+                      <button onClick={()=>downloadBatchMut.mutate({ batchId:bid, format:"xlsx" })} title={t("تنزيل Excel","Download Excel")} className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100"><FileText size={12}/></button>
+                      <button onClick={()=>downloadBatchMut.mutate({ batchId:bid, format:"json" })} title={t("تنزيل JSON","Download JSON")} className="p-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100"><Download size={12}/></button>
+                    </>
+                  )}
+                  {isFailed && (
+                    <button onClick={()=>retryBatchMut.mutate(bid)} disabled={retryBatchMut.isPending} title={t("إعادة المحاولة","Retry")} className="p-1 rounded bg-amber-50 text-amber-600 hover:bg-amber-100"><RefreshCw size={12}/></button>
+                  )}
+                </div>
               </div>
             );})}
         </div>
@@ -12647,6 +12859,138 @@ function AdminPermissions({}: PageProps) {
   );
 }
 
+// ─── ADMIN — ERP EXPORT (ERP-2, cross-company) — T10 §C ──────────────────────
+function AdminERP({}: PageProps) {
+  const { t, dir } = useLang();
+  const [statusFilter, setStatusFilter] = useState<"all"|"ready"|"exported"|"failed">("all");
+  const [moduleFilter, setModuleFilter] = useState("");
+
+  const { data: summary } = useAdminErpSummary();
+  const { data: batchPage } = useAdminErpBatches({
+    status: statusFilter,
+    moduleKey: moduleFilter || undefined,
+  });
+  const exportMut   = useAdminErpExport();
+  const retryMut    = useRetryERPBatch();
+  const downloadMut = useDownloadERPBatch();
+
+  const batches = (batchPage?.data ?? []) as any[];
+  const conn = summary?.connection;
+  const kpis = summary?.kpis;
+
+  const statusMeta = (s:string) => {
+    const exported = s==="exported"||s==="success"||s==="completed";
+    if(exported) return { cls:"bg-emerald-100 text-emerald-700", label:t("تم التصدير لـ ERP","Exported"), mark:"✓" };
+    if(s==="failed") return { cls:"bg-red-100 text-red-700", label:t("فشل التصدير","Failed"), mark:"✕" };
+    return { cls:"bg-amber-100 text-amber-700", label:t("جاهز للتصدير","Ready"), mark:"●" };
+  };
+
+  return (
+    <div className="space-y-5" dir={dir}>
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-800">{t("التصدير لـ ERP — كل الشركات","ERP Export — All Companies")}</h2>
+          <p className="text-gray-400 text-sm mt-0.5">{t("متابعة دفعات التصدير عبر جميع الشركات","Cross-company export batches")}</p>
+        </div>
+        <button onClick={()=>exportMut.mutate({ allReady:true })} disabled={exportMut.isPending}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-purple-600 text-white text-xs font-bold hover:bg-purple-700 disabled:opacity-50">
+          <ChevronsRight size={13}/> {t("تصدير كل الجاهز","Export all ready")}
+        </button>
+      </div>
+
+      {/* Connection status */}
+      <div className={`rounded-xl border p-4 flex items-center gap-3 ${conn?.ok?"bg-emerald-50 border-emerald-200":"bg-red-50 border-red-200"}`}>
+        <span className={`w-2.5 h-2.5 rounded-full ${conn?.ok?"bg-emerald-500 animate-pulse":"bg-red-500"}`}/>
+        <div className="flex-1">
+          <p className={`text-sm font-bold ${conn?.ok?"text-emerald-800":"text-red-800"}`}>{conn?.label ?? (conn?.ok?t("متصل ونشط","Connected"):t("غير متصل","Disconnected"))}</p>
+          {conn?.lastExportAt && <p className="text-[11px] text-gray-500">{t("آخر تصدير","Last export")}: {new Date(conn.lastExportAt).toLocaleString("ar-SA")} · {conn.lastExportCount ?? 0} {t("دفعة","batches")}</p>}
+        </div>
+      </div>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-4 gap-4">
+        <KpiCard label={t("جاهزة للتصدير","Ready")}      value={String(kpis?.ready ?? 0)}         sub={t("بانتظار الترحيل","awaiting export")} icon={<Clock size={18} className="text-amber-600"/>} accent="amber"/>
+        <KpiCard label={t("صُدِّرت اليوم","Exported Today")} value={String(kpis?.exportedToday ?? 0)} sub={t("اليوم","today")} icon={<CheckCircle2 size={18} className="text-emerald-600"/>} accent="emerald"/>
+        <KpiCard label={t("بانتظار رئيس الحسابات","Awaiting Head")} value={String(kpis?.awaitingHead ?? 0)} sub={t("لم تُعتمد نهائياً","not final-approved")} icon={<Lock size={18} className="text-blue-600"/>} accent="blue"/>
+        <KpiCard label={t("فشل التصدير","Failed")}        value={String(kpis?.failed ?? 0)}        sub={t("يحتاج إعادة","needs retry")} icon={<AlertTriangle size={18} className="text-red-600"/>} accent="red"/>
+      </div>
+
+      {/* Filters */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الحالة","Status")}</label>
+            <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value as typeof statusFilter)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+              <option value="all">{t("الكل","All")}</option>
+              <option value="ready">{t("جاهز للتصدير","Ready")}</option>
+              <option value="exported">{t("تم التصدير","Exported")}</option>
+              <option value="failed">{t("فشل","Failed")}</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الموديول","Module")}</label>
+            <select value={moduleFilter} onChange={e=>setModuleFilter(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
+              <option value="">{t("كل الموديولات","All modules")}</option>
+              {Object.entries(OP_MODULE_LABELS).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* Cross-company batch log */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-3.5 bg-gray-50/60 border-b border-gray-100">
+          <p className="font-bold text-gray-900 text-sm">{t("سجل دفعات التصدير — كل الشركات","Export batch log — all companies")}</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-4 py-2.5 text-right font-semibold text-gray-600">{t("رقم الدفعة","Batch")}</th>
+                <th className="px-4 py-2.5 text-right font-semibold text-gray-600">{t("الشركة","Company")}</th>
+                <th className="px-4 py-2.5 text-center font-semibold text-gray-600">{t("الموديول","Module")}</th>
+                <th className="px-4 py-2.5 text-center font-semibold text-gray-600">{t("العمليات","Ops")}</th>
+                <th className="px-4 py-2.5 text-center font-semibold text-gray-600">{t("المبلغ","Amount")}</th>
+                <th className="px-4 py-2.5 text-center font-semibold text-gray-600">{t("الحالة","Status")}</th>
+                <th className="px-4 py-2.5 text-center font-semibold text-gray-600">{t("إجراءات","Actions")}</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50">
+              {batches.length===0 && <tr><td colSpan={7} className="text-center text-gray-400 py-8">{t("لا توجد دفعات","No batches")}</td></tr>}
+              {batches.map((b,i)=>{
+                const bid = b.batchId ?? b.id;
+                const sm = statusMeta(b.status);
+                const exported = b.status==="exported"||b.status==="success"||b.status==="completed";
+                const amtH = typeof b.totalAmount==="number"?b.totalAmount:0;
+                return (
+                <tr key={i} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-mono text-purple-600">{bid}</td>
+                  <td className="px-4 py-3 text-gray-600">{b.companyId ?? "—"}</td>
+                  <td className="px-4 py-3 text-center">{b.moduleKey ? (OP_MODULE_LABELS[b.moduleKey] ?? b.moduleKey) : "—"}</td>
+                  <td className="px-4 py-3 text-center font-mono">{b.operationCount ?? b.operationsCount ?? 0}</td>
+                  <td className="px-4 py-3 text-center font-mono font-bold text-gray-800">{fmtAmt(Math.round(amtH/100))}</td>
+                  <td className="px-4 py-3 text-center"><span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${sm.cls}`}>{sm.mark} {b.statusLabelAr ?? sm.label}</span></td>
+                  <td className="px-4 py-3">
+                    <div className="flex items-center justify-center gap-1">
+                      {b.status==="ready" && <button onClick={()=>exportMut.mutate({ batchIds:[bid] })} disabled={exportMut.isPending} title={t("تصدير","Export")} className="p-1 rounded bg-purple-50 text-purple-600 hover:bg-purple-100"><ChevronsRight size={12}/></button>}
+                      {b.status==="failed" && <button onClick={()=>retryMut.mutate(bid)} disabled={retryMut.isPending} title={t("إعادة المحاولة","Retry")} className="p-1 rounded bg-amber-50 text-amber-600 hover:bg-amber-100"><RefreshCw size={12}/></button>}
+                      {exported && <>
+                        <button onClick={()=>downloadMut.mutate({ batchId:bid, format:"xlsx" })} title={t("تنزيل Excel","Excel")} className="p-1 rounded bg-emerald-50 text-emerald-600 hover:bg-emerald-100"><FileText size={12}/></button>
+                        <button onClick={()=>downloadMut.mutate({ batchId:bid, format:"json" })} title={t("تنزيل JSON","JSON")} className="p-1 rounded bg-blue-50 text-blue-600 hover:bg-blue-100"><Download size={12}/></button>
+                      </>}
+                    </div>
+                  </td>
+                </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminSettings({}: PageProps) {
   const { data: settingsData } = useAdminSettings();
   const updateSettingsMut = useUpdateAdminSettings();
@@ -14461,11 +14805,13 @@ export function ASABPrototype() {
   const now = () => new Date().toLocaleTimeString("ar-SA", { hour:"2-digit", minute:"2-digit" });
 
   // ─── Live mutations (fire alongside optimistic local state) ──────────────
-  const approveMut      = useApproveOperation();
-  const rejectMut       = useRejectOperation();
-  const finalMut        = useFinalApprove();
-  const bulkApproveMut  = useBulkApprove();
-  const erpBatchMut     = useCreateERPBatch();
+  const approveMut       = useApproveOperation();
+  const rejectMut        = useRejectOperation();
+  const finalMut         = useFinalApprove();
+  const bulkApproveMut   = useBulkApprove();
+  const bulkFinalMut     = useBulkFinalApprove();
+  const returnReviewMut  = useReturnForReview();
+  const erpBatchMut      = useCreateERPBatch();
 
   const approveOp = (id:string) => {
     setOps(p=>p.map(o=>
@@ -14515,8 +14861,19 @@ export function ASABPrototype() {
       if(o.status==="approved") return {...o, status:"final-approved" as OpStatus, finalApprovedBy:"رئيس الحسابات", finalApprovedAt:ts};
       return o;
     }));
+    // T10 §A4: pending → stage-1 bulk-approve; approved → one bulk-final-approve call.
     if (pendingIds.length > 0)  bulkApproveMut.mutate({ operationIds: pendingIds });
-    approvedIds.forEach(id => finalMut.mutate({ id }));
+    if (approvedIds.length > 0) bulkFinalMut.mutate({ operationIds: approvedIds });
+  };
+
+  // T10 §A4 — return an approved op to the accountant for review (op → pending).
+  const returnForReview = (id:string, note?:string) => {
+    setOps(p=>p.map(o=>
+      o.id===id && o.status==="approved"
+        ? { ...o, status:"pending" as OpStatus, approvedBy:undefined, approvedAt:undefined }
+        : o
+    ));
+    returnReviewMut.mutate({ id, note });
   };
 
   // Corrective operation: creates a new linked pending op referencing the original
@@ -14575,7 +14932,7 @@ export function ASABPrototype() {
         <AppShell
           state={appState} ops={ops}
           approveOp={approveOp} rejectOp={rejectOp} finalApproveOp={finalApproveOp} bulkApprove={bulkApprove}
-          addCorrectiveOp={addCorrectiveOp} markErpPosted={markErpPosted}
+          returnForReview={returnForReview} addCorrectiveOp={addCorrectiveOp} markErpPosted={markErpPosted}
           navigate={navigate} logout={logout} setModal={setModal} setDetailId={setDetailId}
         />
         {/* Floating live-support chat — available across the whole shell. */}
