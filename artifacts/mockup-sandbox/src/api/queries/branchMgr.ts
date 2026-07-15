@@ -8,38 +8,90 @@ import { api } from "../client";
 import { getErrorMessage } from "../errors";
 import { queryKeys } from "./keys";
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types (T12) ───────────────────────────────────────────────────────────
+export interface BranchTask {
+  id: string;
+  label: string;
+  state: "completed" | "pending" | "later" | string;
+  stateLabel?: string;
+}
+export interface BranchCrewMember {
+  id: string;
+  name: string;
+  role?: string;
+  shift?: string;
+  attendanceStatus?: string;
+  attendanceLabel?: string;
+}
+export interface BranchRequiredReport {
+  id: string;
+  name: string;
+  required?: boolean;
+  uploadedToday?: boolean;
+  lastStatus?: string;
+}
 export interface BranchOverviewResponse {
   branch: {
     id: string;
     name: string;
     brandName?: string;
     city?: string;
+    // Legacy fields kept for back-compat.
     monthlyTargetHalalas?: number;
     monthlySalesHalalas?: number;
     monthlyExpensesHalalas?: number;
   };
-  kpis?: Record<string, number | string>;
+  // T12 §1 — hero achievement band (halalas).
+  hero?: { targetHalalas: number; actualHalalas: number; achievementPct: number };
+  kpis?: {
+    todaySales?: number;
+    todaySalesTrendPct?: number;
+    todayOrders?: number;
+    monthSales?: number;
+    monthExpenses?: number;
+    netProfit?: number;
+    activeEmployees?: number;
+    requiredReportsCount?: number;
+    [k: string]: number | string | undefined;
+  };
+  tasksOfDay?: BranchTask[];
+  crew?: BranchCrewMember[];
+  requiredReports?: BranchRequiredReport[];
+  // Legacy.
   todayUploads?: { count: number; missing: string[] };
   activeShift?: { id?: string; supervisorName?: string; startedAt?: string };
 }
 
 export interface BranchEmployee {
   id: string;
+  empNumber?: string;
   name: string;
   role?: string;
-  active: boolean;
+  monthlySalary?: number;
+  shiftType?: string;
+  nationalId?: string;
+  hireDate?: string;
+  status?: string;
+  // Legacy.
+  active?: boolean;
   salaryHalalas?: number;
   startedAt?: string;
 }
 
 export interface BranchItem {
   id: string;
+  code?: string;
   name: string;
   unit?: string;
   category?: string;
   /** New backend uses `cat`; kept alongside `category` for compatibility. */
   cat?: string;
+  priceHalalas?: number;
+  minLevel?: number;
+  expectedQty?: number;
+  stockStatus?: "ok" | "low" | "critical" | string;
+  stockStatusLabel?: string;
+  // Legacy.
   currQty?: number;
   prevQty?: number;
   lastCountedAt?: string;
@@ -65,11 +117,16 @@ export interface BranchSupplier {
   contactName?: string;
   contactPhone?: string;
   contactEmail?: string;
+  commercialReg?: string;
+  address?: string;
   paymentTerms?: string;
   rating?: number;
   status?: string;
+  statusLabel?: string;
   isPreferred?: boolean;
   isActive: boolean;
+  /** true = a still-pending «طلب مورد جديد» row (chip «قيد المراجعة»). */
+  isRequest?: boolean;
 }
 
 export interface BranchSettings {
@@ -220,8 +277,11 @@ export function useBranchActiveShift() {
 export function useBranchSubmitItemsCount() {
   const qc = useQueryClient();
   return useMutation({
+    // T12 §4 — canonical body { counts:[{ inventoryItemId, actualQty }] }.
+    // Ids must be on the branch's countable list (else 422 INVALID_ITEM_IDS);
+    // one count per branch per day (a second → 409 DAILY_COUNT_EXISTS).
     mutationFn: async (body: {
-      counts: Array<{ itemId: string; qty: number }>;
+      counts: Array<{ inventoryItemId: string; actualQty: number }>;
       countedAt?: string;
       notes?: string;
     }) => {

@@ -512,14 +512,48 @@ export interface PlatformReminderRule {
 // ─── Branch (platform) ─────────────────────────────────────────────────────
 export interface PlatformBranchOverview {
   branch: { id: string; name: string; manager?: string };
+  // T12 §1 — hero achievement band (halalas).
+  hero?: {
+    targetHalalas: number;
+    actualHalalas: number;
+    achievementPct: number;
+  };
   kpis: {
     todaySales: number;
+    todaySalesTrendPct?: number;
     todayOrders: number;
+    monthSales?: number;
+    monthExpenses?: number;
+    netProfit?: number;
     activeEmployees: number;
     requiredReportsCount: number;
   };
-  requiredReports: Array<{ id: string; name: string; deadline: string; urgent: boolean }>;
-  currentShift: {
+  // T12 §1 — task checklist for the day.
+  tasksOfDay?: Array<{
+    id: string;
+    label: string;
+    state: "completed" | "pending" | "later" | string;
+    stateLabel?: string;
+  }>;
+  // T12 §1 — active crew (attendance is a future source; active reads `present`).
+  crew?: Array<{
+    id: string;
+    name: string;
+    role?: string;
+    shift?: string;
+    attendanceStatus?: string;
+    attendanceLabel?: string;
+  }>;
+  requiredReports: Array<{
+    id: string;
+    name: string;
+    deadline?: string;
+    urgent?: boolean;
+    required?: boolean;
+    uploadedToday?: boolean;
+    lastStatus?: string;
+  }>;
+  currentShift?: {
     supervisor: string;
     startedAt: string;
     duration: string;
@@ -578,6 +612,7 @@ export interface PlatformBranchEmployee {
   monthlySalary?: number;
   shiftType?: string;
   hireDate?: string;
+  status?: string;
   /** Cashier login-account fields (required to provision a mobile account). */
   email?: string;
   phone?: string;
@@ -602,14 +637,29 @@ export interface PlatformBranchSettings {
   [k: string]: unknown;
 }
 
-/** GET /company/me/branch/inventory-items → branch-assigned items (or brand catalog). */
+/** One branch inventory row (T12 §4). Money = halalas. */
+export interface PlatformBranchInventoryItem {
+  id: string;
+  code?: string;
+  name: string;
+  unit?: string;
+  cat?: string;
+  category?: string;
+  priceHalalas?: number;
+  minLevel?: number;
+  expectedQty?: number;
+  stockStatus?: "ok" | "low" | "critical" | string;
+  stockStatusLabel?: string;
+}
+
+/** GET /company/me/branch/items → branch-assigned items (or brand catalog). */
 export interface PlatformBranchInventoryItems {
-  items: Array<{ id: string; name: string; unit?: string; cat?: string }>;
+  items: PlatformBranchInventoryItem[];
   /** Name of whoever configured the list, or null when it falls back to the catalog. */
   configuredBy: string | null;
 }
 
-/** GET /company/me/branch/suppliers → the branch's own company's active suppliers. */
+/** GET /company/me/branch/suppliers → active suppliers + still-pending «طلب مورد جديد» rows. */
 export interface PlatformBranchSupplierRow {
   id: string;
   name: string;
@@ -617,26 +667,45 @@ export interface PlatformBranchSupplierRow {
   contactName?: string;
   contactPhone?: string;
   contactEmail?: string;
+  commercialReg?: string;
+  address?: string;
   paymentTerms?: string;
   rating?: number;
   status?: string;
+  statusLabel?: string;
   isActive?: boolean;
+  /** true = a pending request (chip «قيد المراجعة»), not yet an approved supplier. */
+  isRequest?: boolean;
 }
 
 // ─── Procurement (platform) ────────────────────────────────────────────────
 export interface PlatformProcurementOverview {
   kpis: {
+    // Operations family (halalas).
     newOrders: number;
     consolidated: number;
     sentToSuppliers: number;
     ordersValueThisWeek: number;
+    // Real bridge pipeline — use these for the headline cards (T11.1).
+    incoming?: number;
+    readyToSend?: number;
+    sentAwaitingConfirmation?: number;
+  };
+  // Monthly savings from consolidation (SAR, bridge world) — T11.8.
+  monthlySavings?: {
+    amount: number;
+    pctOfPurchases: number;
+    trendPct: number;
   };
   newOrders?: Array<{
     id: string;
-    branch: string;
-    itemCount: number;
+    publicId?: string;
+    branch?: string;
+    branchId?: string;
+    itemCount?: number;
     total: number;
-    urgency?: string;
+    urgency?: "normal" | "urgent" | string;
+    urgencyLabel?: string;
   }>;
 }
 
@@ -675,7 +744,33 @@ export interface PlatformProcurementSupplier {
   contactPhone?: string;
   commercialReg?: string;
   paymentTerms?: string;
+  /** 0–50 (stars × 10); ÷10 for star display (T11.13). */
   rating?: number;
+  ratingAvg?: number;
+  status?: string;
+  isActive?: boolean;
+  itemsCount?: number;
+  monthlyOrderCount?: number;
+  lifetimeOrdersCount?: number;
+  lifetimeSpend?: number; // SAR
+}
+
+/** Suppliers list header KPIs (T11.13 — meta.kpis). */
+export interface ProcurementSuppliersKpis {
+  activeSuppliers: number;
+  totalPurchases: number; // SAR
+  avgRating: number; // 0–5 stars
+}
+
+export interface ProcurementSuppliersListResponse {
+  data: PlatformProcurementSupplier[];
+  meta?: {
+    page?: number;
+    pageSize?: number;
+    total?: number;
+    totalPages?: number;
+    kpis?: ProcurementSuppliersKpis;
+  };
 }
 
 export interface PlatformProcurementItem {
@@ -683,7 +778,14 @@ export interface PlatformProcurementItem {
   name: string;
   unit?: string;
   category?: string;
+  code?: string;
   defaultPrice?: number;
+  lastPriceHalalas?: number;
+  supplierId?: string;
+  supplierName?: string;
+  supplierCount?: number;
+  available?: boolean;
+  status?: string;
 }
 
 // ─── Procurement purchase-orders BRIDGE (real branch/mobile-app orders) ──────
@@ -760,6 +862,29 @@ export interface PurchaseOrderGroupedCity {
   orderIds: string[];
 }
 
+// by=item card (T11.7 — the SRS core value loop). Money = SAR floats.
+export interface PurchaseOrderGroupedItemCard {
+  itemId: string;
+  name: string;
+  unit?: string;
+  requestsCount: number;
+  branchesCount: number;
+  branchLines: Array<{
+    branchId: string;
+    branchName: string;
+    qty: number;
+    unit?: string;
+  }>;
+  totalQuantity: number;
+  suggestedSupplier: { id: string; name: string; unitPrice: number } | null;
+  unitPrice: number | null;
+  totalCost: number | null;
+  savings: number | null;
+  savingsPct: number | null;
+  status: string;
+  orderIds: string[];
+}
+
 export interface PurchaseOrderGroupedResponse {
   suppliers?: PurchaseOrderGroupedSupplier[];
   unassignedOrders?: Array<{
@@ -769,6 +894,7 @@ export interface PurchaseOrderGroupedResponse {
     totalAmount: number;
   }>;
   cities?: PurchaseOrderGroupedCity[];
+  items?: PurchaseOrderGroupedItemCard[];
 }
 
 export interface PurchaseOrderSentGroup {
@@ -778,7 +904,12 @@ export interface PurchaseOrderSentGroup {
   supplierName: string;
   ordersCount: number;
   totalAmount: number; // SAR float
-  status: "confirmed" | "preparing" | "on_the_way" | "delivered" | string;
+  // T11.10 — a freshly-sent batch reads `sent` (not `confirmed`) until the supplier acts.
+  status: "sent" | "confirmed" | "preparing" | "on_the_way" | "delivered" | string;
+  statusLabel?: string;
+  savings?: number | null; // SAR, snapshotted at send (T11.8)
+  savingsPct?: number | null;
+  eta?: string | null;
   sentAt: string;
 }
 
@@ -801,6 +932,9 @@ export interface PurchaseOrderSendResult {
   groupNumber: string;
   supplierId: string;
   ordersCount: number;
+  savings?: number | null; // SAR (T11.8)
+  savingsPct?: number | null;
+  eta?: string | null; // T11.9
   sentAt: string;
 }
 
@@ -815,39 +949,55 @@ export interface SupplierOverview {
   kpis: {
     newOrders: number;
     acceptedThisMonth: number;
-    totalSalesThisMonth: number;
+    totalSalesThisMonth: number; // integer halalas
+    totalSalesTrendPct?: number; // this-month vs last-month change (%)
     activeItems: number;
     totalItems: number;
   };
-  recentOrders?: SupplierOrder[];
+  recentOrders?: SupplierOrder[]; // newest first, max 8
 }
 
+// T13 order row — returned by overview.recentOrders, the orders list,
+// and every accept/reject/deliver response. Render statusKey + statusLabel
+// (never the raw `status`, which may hold a procurement synonym).
 export interface SupplierOrder {
   id: string;
-  publicId?: string;
+  publicId?: string; // e.g. "PUR-A1B2C3"
+  total: number; // integer halalas
+  status: string; // raw DB value — do not tab/filter on this
+  statusKey?: "pending" | "accepted" | "delivered" | "rejected";
+  statusLabel?: string; // Arabic label matching statusKey
+  from?: string; // branch name, else «مدير المشتريات»
+  itemsText?: string | null; // human summary of order lines, else «n صنف» / null
+  orderDate?: string;
+  deliveryDate?: string | null; // supplier-promised, else requested, else null
+  // legacy / compat
   branchName?: string;
-  status: "pending" | "accepted" | "rejected" | "delivered" | "confirmed" | string;
-  total: number;
-  deliveryDate?: string;
   items?: Array<{ name: string; unit: string; qty: number; price: number }>;
   createdAt?: string;
 }
 
+// T13 reports — aggregates over fulfilled (accepted + delivered) orders only.
+// SUP-3 breakdowns (topItems/topBranches/monthly) are DEFERRED and omitted
+// by the backend — do not render placeholders for them.
 export interface SupplierReports {
-  totalRevenue: number;
+  totalRevenue: number; // integer halalas
   orderCount: number;
-  averageOrderValue: number;
-  topItems?: Array<{ name: string; qty: number; revenue: number }>;
-  topBranches?: Array<{ branch: string; qty: number; revenue: number }>;
-  monthly?: Array<{ month: string; revenue: number; orderCount: number }>;
+  averageOrderValue: number; // integer halalas
 }
 
+// T13 item row — returned by the items list and every item write.
+// `price` and `priceHalalas` are the SAME integer-halalas value.
 export interface SupplierItem {
   id: string;
   code?: string;
   name: string;
   unit?: string;
-  price: number;
+  price: number; // integer halalas
+  priceHalalas?: number; // same value as price
   minQty?: number;
+  maxQty?: number | null;
+  available?: boolean; // mirrors status
+  leadTimeDays?: number;
   status?: "active" | "inactive" | string;
 }

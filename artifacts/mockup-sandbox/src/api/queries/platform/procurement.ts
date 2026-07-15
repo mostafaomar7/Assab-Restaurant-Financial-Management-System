@@ -11,6 +11,7 @@ import type {
   PlatformProcurementOrder,
   PlatformProcurementOverview,
   PlatformProcurementSupplier,
+  ProcurementSuppliersListResponse,
   PurchaseOrder,
   PurchaseOrderBulkApproveResult,
   PurchaseOrderDetail,
@@ -208,15 +209,18 @@ export function useSendProcurementOrderPlatform() {
 }
 
 // ─── Suppliers & items ──────────────────────────────────────────────────────
+// Returns the full { data, meta } — meta.kpis carries activeSuppliers/totalPurchases/avgRating (T11.13).
 export function useProcurementSuppliersPlatform() {
   return useQuery({
     queryKey: queryKeys.platformProcurementSuppliers,
     queryFn: async () => {
       const res = await api.get<
-        Page<PlatformProcurementSupplier> | PlatformProcurementSupplier[]
+        ProcurementSuppliersListResponse | PlatformProcurementSupplier[]
       >("/company/me/procurement/suppliers");
       const d = res.data;
-      return Array.isArray(d) ? d : (d.data ?? []);
+      return Array.isArray(d)
+        ? { data: d, meta: undefined }
+        : { data: d.data ?? [], meta: d.meta };
     },
   });
 }
@@ -385,9 +389,9 @@ export function useBulkApprovePurchaseOrders() {
   });
 }
 
-/** Live preview grouped by supplier (default) or city. Nothing persisted here. */
+/** Live preview grouped by supplier (default), city, or item (T11.7). Not persisted. */
 export function useGroupedPurchaseOrders(
-  by: "supplier" | "city" = "supplier",
+  by: "supplier" | "city" | "item" = "supplier",
   options: { enabled?: boolean } = {},
 ) {
   return useQuery({
@@ -409,13 +413,16 @@ export function useSendGroupedPurchaseOrders() {
     mutationFn: async ({
       supplierId,
       orderIds,
+      expectedDeliveryDate,
     }: {
       supplierId: string;
       orderIds?: string[];
+      expectedDeliveryDate?: string;
     }) => {
       const res = await api.post<PurchaseOrderSendResult>(`${PO_BASE}/grouped/send`, {
         supplierId,
         orderIds,
+        expectedDeliveryDate,
       });
       return res.data;
     },

@@ -5517,23 +5517,28 @@ function BranchOverview() {
   const { data: apiOverview } = useBranchOverview();
   const { data: apiEmployees = [] } = useBranchEmployees();
   const SAR = t("ر.س","SAR");
-  const apiKpis = (apiOverview?.kpis ?? {}) as Record<string, number | string>;
+  const apiKpis = (apiOverview?.kpis ?? {}) as Record<string, number | undefined>;
   const apiBranch = apiOverview?.branch;
-  // All figures from GET /company/me/branch/overview. No static fallback.
-  const apiSalesM   = apiBranch?.monthlySalesHalalas    != null ? Math.round(apiBranch.monthlySalesHalalas    / 100) : 0;
-  const apiExpM     = apiBranch?.monthlyExpensesHalalas != null ? Math.round(apiBranch.monthlyExpensesHalalas / 100) : 0;
-  const apiTarget   = apiBranch?.monthlyTargetHalalas   != null ? Math.round(apiBranch.monthlyTargetHalalas   / 100) : 0;
-  const todaySales  = (apiKpis.todaySalesHalalas as number | undefined) != null
-    ? Math.round((apiKpis.todaySalesHalalas as number) / 100)
-    : 0;
+  const hero = apiOverview?.hero;
+  // T12 §1 — hero band (halalas), falling back to legacy branch.monthly* fields.
+  const apiTarget = Math.round(((hero?.targetHalalas ?? apiBranch?.monthlyTargetHalalas ?? 0)) / 100);
+  const apiSalesM = Math.round(((apiKpis.monthSales ?? apiBranch?.monthlySalesHalalas ?? 0)) / 100);
+  const apiExpM   = Math.round(((apiKpis.monthExpenses ?? apiBranch?.monthlyExpensesHalalas ?? 0)) / 100);
+  const netProfit = Math.round(((apiKpis.netProfit ?? ((apiKpis.monthSales ?? 0) - (apiKpis.monthExpenses ?? 0))) ) / 100);
+  const todaySales = Math.round(((apiKpis.todaySales ?? (apiKpis.todaySalesHalalas as number | undefined) ?? 0)) / 100);
   const branchName  = apiBranch?.name      || "";
   const branchBrand = apiBranch?.brandName || "";
   const branchCity  = apiBranch?.city      || "";
-  const pct = apiTarget > 0 ? Math.round((apiSalesM/apiTarget)*100) : 0;
-  // Tasks/crew driven by the API. No static fallback.
-  const apiMissing = apiOverview?.todayUploads?.missing ?? [];
-  const tasks = apiMissing.map((m: string) => [m, t("معلق","Pending"), "pending"] as [string,string,string]);
-  const crew = (apiEmployees as any[]).slice(0,4).map((e: any) => [e.name, e.role || "—", "", e.active ? t("نشط","Active") : t("غائب","Absent")] as [string,string,string,string]);
+  const pct = hero?.achievementPct ?? (apiTarget > 0 ? Math.round((apiSalesM/apiTarget)*100) : 0);
+  // T12 §1 — tasksOfDay (completed/pending/later) + crew from the overview payload;
+  // fall back to legacy todayUploads.missing / the employees list.
+  const stateCfg: Record<string,string> = { completed:"done", pending:"pending", later:"later" };
+  const tasks: [string,string,string][] = apiOverview?.tasksOfDay?.length
+    ? apiOverview.tasksOfDay.map(tk => [tk.label, tk.stateLabel ?? tk.state, stateCfg[tk.state] ?? "pending"])
+    : (apiOverview?.todayUploads?.missing ?? []).map((m: string) => [m, t("معلق","Pending"), "pending"]);
+  const crew: [string,string,string,string][] = apiOverview?.crew?.length
+    ? apiOverview.crew.slice(0,6).map(c => [c.name, c.role || "—", c.shift || "", c.attendanceLabel ?? t("حاضر","Present")])
+    : (apiEmployees as any[]).slice(0,4).map((e: any) => [e.name, e.role || "—", "", (e.status==="active"||e.active) ? t("نشط","Active") : t("غائب","Absent")]);
   return (
     <div className="space-y-5" dir={dir}>
       <div><h2 className="text-xl font-bold text-gray-800">{t("لوحة فرع العليا","Al-Ulia Branch Dashboard")} — {branchName}</h2><p className="text-gray-400 text-sm">{branchBrand} · {branchCity}</p></div>
@@ -5546,7 +5551,7 @@ function BranchOverview() {
         <KpiCard label={t("مبيعات اليوم","Today's Sales")}   value={fmt(todaySales)} sub={SAR} icon={<TrendingUp size={18} className="text-emerald-600"/>} accent="emerald" delta="+5.2%"/>
         <KpiCard label={t("مبيعات الشهر","Monthly Sales")}   value={`${fmt(Math.round(apiSalesM/1000))}K`} sub={SAR} icon={<BarChart3 size={18} className="text-blue-600"/>} accent="blue"/>
         <KpiCard label={t("مصروفات الشهر","Monthly Expenses")} value={`${fmt(Math.round(apiExpM/1000))}K`} sub={SAR} icon={<Wallet size={18} className="text-amber-600"/>} accent="amber"/>
-        <KpiCard label={t("صافي الربح","Net Profit")}         value={`${fmt(Math.round((apiSalesM-apiExpM)/1000))}K`} sub={SAR} icon={<CheckCircle2 size={18} className="text-purple-600"/>} accent="purple"/>
+        <KpiCard label={t("صافي الربح","Net Profit")}         value={`${fmt(Math.round(netProfit/1000))}K`} sub={SAR} icon={<CheckCircle2 size={18} className="text-purple-600"/>} accent="purple"/>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5">
@@ -5567,8 +5572,8 @@ function BranchOverview() {
             {crew.map(([n,r,s,st])=>(
               <div key={n} className="flex items-center gap-2 py-1.5 border-b border-gray-50 last:border-0">
                 <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-purple-400 to-blue-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">{n[0]}</div>
-                <div className="flex-1"><p className="text-sm font-semibold text-gray-700">{n}</p><p className="text-[10px] text-gray-400">{r} · {s}</p></div>
-                <Badge className={`text-[10px] ${st===t("نشط","Active")?"bg-emerald-50 text-emerald-700":"bg-gray-100 text-gray-500"}`}>{st}</Badge>
+                <div className="flex-1"><p className="text-sm font-semibold text-gray-700">{n}</p><p className="text-[10px] text-gray-400">{r}{s?` · ${s}`:""}</p></div>
+                <Badge className={`text-[10px] ${st===t("غائب","Absent")?"bg-gray-100 text-gray-500":"bg-emerald-50 text-emerald-700"}`}>{st}</Badge>
               </div>
             ))}
           </div>
@@ -5686,19 +5691,23 @@ function BranchItems() {
   const [showInvForm,setShowInvForm]=useState(false);
   const [invCounts,setInvCounts]=useState<Record<string,string>>({});
   const [invSubmitted,setInvSubmitted]=useState(false);
-  // Driven by GET /company/me/branch/items. No static fallback.
+  // Driven by GET /company/me/branch/items — read the server-derived stock status.
   const items = apiItems.map(i => {
-    const qty = i.currQty ?? 0;
-    const min = 10;
-    const status = qty <= min/3 ? "critical" : qty < min ? "low" : "ok";
-    return { name: i.name, qty, unit: i.unit || "", min, status, id: i.id };
+    const qty = i.expectedQty ?? i.currQty ?? 0;
+    const min = i.minLevel ?? 0;
+    const status = i.stockStatus ?? (min>0 ? (qty<=min?"critical":qty<=min*1.5?"low":"ok") : "ok");
+    return { name: i.name, qty, unit: i.unit || "", min, status, id: i.id, statusLabel: i.stockStatusLabel };
   });
   const submitInventory = () => {
-    if (apiItems.length > 0) {
-      const counts = Object.entries(invCounts).map(([itemId, qty]) => ({ itemId, qty: Number(qty) || 0 }));
-      submitCountMut.mutate({ counts });
+    // T12 §4 — counts keyed by inventoryItemId; ids must be on the countable list.
+    const counts = Object.entries(invCounts)
+      .filter(([,v]) => v !== "")
+      .map(([inventoryItemId, v]) => ({ inventoryItemId, actualQty: Number(v) || 0 }));
+    if (counts.length > 0) {
+      submitCountMut.mutate({ counts }, { onSuccess: () => setInvSubmitted(true) });
+    } else {
+      setInvSubmitted(true);
     }
-    setInvSubmitted(true);
   };
   const SC:Record<string,string>={ok:"bg-emerald-50 text-emerald-700",low:"bg-amber-50 text-amber-700",critical:"bg-red-50 text-red-700"};
   return (
@@ -5713,9 +5722,9 @@ function BranchItems() {
             ):(
               <div className="space-y-2 max-h-80 overflow-y-auto">
                 {items.map(item=>(
-                  <div key={item.name} className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-xl">
+                  <div key={item.id} className="flex items-center gap-3 p-2.5 bg-gray-50 rounded-xl">
                     <div className="flex-1"><p className="text-sm font-semibold text-gray-800">{item.name}</p><p className="text-[11px] text-gray-400">{t("المتوقع:","Expected:")} {item.qty} {item.unit}</p></div>
-                    <input type="number" value={invCounts[item.name]??""} onChange={e=>setInvCounts(p=>({...p,[item.name]:e.target.value}))} placeholder={String(item.qty)} className="w-20 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none text-center focus:border-purple-400"/>
+                    <input type="number" value={invCounts[item.id]??""} onChange={e=>setInvCounts(p=>({...p,[item.id]:e.target.value}))} placeholder={String(item.qty)} className="w-20 text-sm border border-gray-200 rounded-lg px-2.5 py-1.5 outline-none text-center focus:border-purple-400"/>
                     <span className="text-xs text-gray-400 w-8">{item.unit}</span>
                   </div>
                 ))}
@@ -5801,22 +5810,50 @@ function BranchSuppliers() {
   const { t, dir } = useCLang();
   const { data: apiSuppliers = [] } = useBranchSuppliers();
   const requestNewMut = useBranchRequestNewSupplier();
-  const suppliers = apiSuppliers.map(s => ({ name: s.name, category: s.category || "", contact: s.phone || "", approved: s.isActive, lastOrder: "" }));
+  const [showReq, setShowReq] = useState(false);
+  const [reqForm, setReqForm] = useState({ name:"", category:"", phone:"", reason:"" });
+  const submitReq = () => {
+    if(!reqForm.name.trim()) return;
+    requestNewMut.mutate(
+      { name: reqForm.name.trim(), category: reqForm.category || undefined, phone: reqForm.phone || undefined, notes: reqForm.reason || undefined },
+      { onSuccess: () => { setShowReq(false); setReqForm({ name:"", category:"", phone:"", reason:"" }); } },
+    );
+  };
   return (
     <div className="space-y-5" dir={dir}>
       <div className="flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-gray-800">{t("الموردون","Suppliers")}</h2><p className="text-gray-400 text-sm">{t("موردو","Suppliers of")} {MY_BRANCH.name}</p></div>
-        <Btn variant="primary" size="sm" onClick={()=>requestNewMut.mutate({ name: t("مورد جديد","New supplier") })}><Plus size={12}/> {t("طلب مورد جديد","Request New Supplier")}</Btn>
+        <Btn variant="primary" size="sm" onClick={()=>setShowReq(true)}><Plus size={12}/> {t("طلب مورد جديد","Request New Supplier")}</Btn>
       </div>
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
-        {suppliers.map((s,i)=>(
-          <div key={i} className="px-5 py-4 flex items-center gap-4 border-b border-gray-50 last:border-0">
-            <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center flex-shrink-0 text-lg">🏭</div>
-            <div className="flex-1"><p className="font-semibold text-gray-800 text-sm">{s.name}</p><p className="text-xs text-gray-400">{s.category} · {t("آخر طلب:","Last order:")} {s.lastOrder}</p></div>
-            <span className="text-xs text-gray-400" dir="ltr">{s.contact}</span>
-            <Badge className={`text-[10px] ${s.approved?"bg-emerald-50 text-emerald-700 border border-emerald-200":"bg-amber-50 text-amber-700 border border-amber-200"}`}>{s.approved?t("معتمد","Approved"):t("قيد المراجعة","Under Review")}</Badge>
+      {showReq && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setShowReq(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir={dir}>
+            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{t("طلب مورد جديد","Request New Supplier")}</h3><button onClick={()=>setShowReq(false)} className="text-gray-400 hover:text-gray-600"><X size={18}/></button></div>
+            <div className="space-y-3">
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("اسم المورد","Supplier name")}</label><input value={reqForm.name} onChange={e=>setReqForm(p=>({...p,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("التصنيف","Category")}</label><input value={reqForm.category} onChange={e=>setReqForm(p=>({...p,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/></div>
+                <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الهاتف","Phone")}</label><input value={reqForm.phone} onChange={e=>setReqForm(p=>({...p,phone:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-purple-400"/></div>
+              </div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("السبب (اختياري)","Reason (optional)")}</label><textarea rows={2} value={reqForm.reason} onChange={e=>setReqForm(p=>({...p,reason:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 resize-none focus:outline-none focus:border-purple-400"/></div>
+              <div className="flex justify-end gap-2"><button onClick={()=>setShowReq(false)} className="px-4 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-semibold hover:bg-gray-50">{t("إلغاء","Cancel")}</button><Btn variant="primary" onClick={submitReq} disabled={!reqForm.name.trim()||requestNewMut.isPending}><Plus size={11}/> {t("إرسال الطلب","Submit")}</Btn></div>
+            </div>
           </div>
-        ))}
+        </div>
+      )}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        {apiSuppliers.length===0 && <div className="px-5 py-10 text-center text-sm text-gray-400">{t("لا يوجد موردون","No suppliers")}</div>}
+        {apiSuppliers.map((s,i)=>{
+          const isReq = s.isRequest === true;
+          const chip = s.statusLabel ?? (isReq ? t("قيد المراجعة","Under Review") : t("معتمد","Approved"));
+          return (
+          <div key={s.id ?? i} className="px-5 py-4 flex items-center gap-4 border-b border-gray-50 last:border-0">
+            <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center flex-shrink-0 text-lg">🏭</div>
+            <div className="flex-1"><p className="font-semibold text-gray-800 text-sm">{s.name}</p><p className="text-xs text-gray-400">{s.category || "—"}{(s.contactName||s.contactPhone||s.phone)?` · ${s.contactName ?? s.contactPhone ?? s.phone}`:""}</p></div>
+            <Badge className={`text-[10px] ${isReq?"bg-amber-50 text-amber-700 border border-amber-200":"bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>{chip}</Badge>
+          </div>
+          );
+        })}
       </div>
     </div>
   );

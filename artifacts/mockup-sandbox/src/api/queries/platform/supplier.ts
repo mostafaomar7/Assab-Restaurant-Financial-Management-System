@@ -69,15 +69,15 @@ export function useRejectSupplierOrder() {
     mutationFn: async ({
       id,
       reason,
-      notes,
+      note,
     }: {
       id: string;
-      reason: string;
-      notes?: string;
+      reason: string; // required, ≤500 chars (T13 §4)
+      note?: string;
     }) => {
       const res = await api.post<SupplierOrder>(
         `/asab/supplier/orders/${id}/reject`,
-        { reason, notes },
+        { reason, note },
       );
       return res.data;
     },
@@ -105,6 +105,7 @@ export function useMarkSupplierOrderDelivered() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform", "supplier", "orders"] });
+      qc.invalidateQueries({ queryKey: ["platform", "supplier", "overview"] });
       toast.success("تم تأكيد التسليم");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -139,7 +140,8 @@ export function useSupplierItems() {
 export function useCreateSupplierItem() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: Partial<SupplierItem> & { name: string; price: number }) => {
+    // T13 §8 — name required; priceHalalas OR price required (both integer halalas).
+    mutationFn: async (body: Partial<SupplierItem> & { name: string }) => {
       const res = await api.post<SupplierItem>("/asab/supplier/items", body);
       return res.data;
     },
@@ -219,7 +221,10 @@ export function useExportSupplierItems() {
 export function useExportSupplierOrders() {
   return useMutation({
     mutationFn: async (
-      filter: { status?: "accepted" | "rejected"; format?: "xlsx" | "csv" } = {},
+      filter: {
+        status?: "pending" | "accepted" | "delivered" | "rejected";
+        format?: "xlsx" | "csv";
+      } = {},
     ) => {
       const fmt = filter.format ?? "xlsx";
       await downloadBlob(

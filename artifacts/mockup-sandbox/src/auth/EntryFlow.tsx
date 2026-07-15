@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
 import { LoginPage } from "./LoginPage";
 import { writeEntrySelection } from "./entrySelection";
+import { SUPPLIER_PORTAL_ENABLED } from "../featureFlags";
 
 // Pre-login entry: choose dashboard → choose role → login. Pure UI, no API calls
 // until the credential step. The chosen {slug, role} is persisted so the mockup
@@ -100,7 +101,10 @@ export function EntryFlow() {
   // ── Step 2: role chooser for the picked dashboard ──
   if (step === "role" && slug) {
     const dash = DASHBOARDS.find((d) => d.slug === slug)!;
-    const roles = ROLES[slug] ?? [];
+    // T13 — hide the supplier role entirely when the portal flag is off.
+    const roles = (ROLES[slug] ?? []).filter(
+      (r) => r.id !== "supplier" || SUPPLIER_PORTAL_ENABLED,
+    );
     return (
       <div style={SHELL}>
         <div style={{ textAlign: "center" }}>

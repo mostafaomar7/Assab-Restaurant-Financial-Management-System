@@ -273,7 +273,7 @@ export const queryKeys = {
     ["platform", "procurement", "purchase-orders", id] as const,
   platformPurchaseOrdersApprovedByMe: (filter?: PurchaseOrdersFilter) =>
     ["platform", "procurement", "purchase-orders", "approved-by-me", { filter }] as const,
-  platformPurchaseOrdersGrouped: (by?: "supplier" | "city") =>
+  platformPurchaseOrdersGrouped: (by?: "supplier" | "city" | "item") =>
     ["platform", "procurement", "purchase-orders", "grouped", by ?? "supplier"] as const,
   platformPurchaseOrdersSent: ["platform", "procurement", "purchase-orders", "sent"] as const,
   platformPurchaseOrderGroup: (groupId: string) =>
