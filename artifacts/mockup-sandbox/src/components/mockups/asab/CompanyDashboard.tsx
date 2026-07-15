@@ -77,7 +77,8 @@ import { SessionsList } from "../../shared/SessionsList";
 import { GlobalSearch } from "../../shared/GlobalSearch";
 import { ChangePasswordModal } from "../../../auth/ChangePasswordModal";
 import { useLanguagePref } from "../../../auth/useLanguagePref";
-import { readEntrySelection } from "../../../auth/entrySelection";
+import { readEntrySelection, clearEntrySelection } from "../../../auth/entrySelection";
+import { useAuth } from "../../../auth/AuthContext";
 import { NotificationPreferencesPage } from "../../shared/NotificationPreferencesPage";
 import { TwoFactorSetupWizard } from "../../shared/TwoFactorSetupWizard";
 import { ApiKeysPage } from "../../shared/ApiKeysPage";
@@ -6541,13 +6542,34 @@ function PageRouter({ role, page, navigate, ops, approve, reject, requestClarifi
 // ═══════════════════════════════════════════════════
 function CompanyDashboardInner() {
   const { t } = useCLang();
+  const { logout: authLogout } = useAuth();
   const [role, setRole] = useState<CRole|null>(null);
   const [page, setPage] = useState<string>("");
   const { ops, approve, reject, requestClarification, finalApprove, bulkApprove, bulkFinalApprove, rejectModalProps, clarifyModalProps } = useSharedOps();
 
-  const selectRole = (r:CRole) => { setRole(r); setPage(DEFAULT_PAGE[r]); };
-  const navigate   = (p:string) => setPage(p);
-  const logout     = () => { setRole(null); setPage(""); };
+  // Tag the current history entry with a page so Back/Forward can restore it.
+  const tagHistory = (p:string, replace=false) => {
+    try {
+      const st = { ...(window.history.state || {}), asabCoPage: p };
+      if (replace) window.history.replaceState(st, "");
+      else window.history.pushState(st, "");
+    } catch { /* history unavailable */ }
+  };
+  const selectRole = (r:CRole) => { setRole(r); setPage(DEFAULT_PAGE[r]); tagHistory(DEFAULT_PAGE[r], true); };
+  const navigate   = (p:string) => { setPage(p); tagHistory(p); };
+  // Real sign-out: clear the pre-login pick + the auth session so the sidebar
+  // "logout" returns to the entry flow, not the in-mockup role picker.
+  const logout     = () => { clearEntrySelection(); setRole(null); setPage(""); void authLogout(); };
+
+  // Browser Back/Forward → restore the previous internal page (URL stays on the preview hash).
+  useEffect(() => {
+    const onPop = (e:PopStateEvent) => {
+      const p = (e.state as { asabCoPage?: string } | null)?.asabCoPage;
+      if (typeof p === "string") setPage(p);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // Open directly on the role picked in the pre-login entry flow (once per mount). After an
   // in-app logout the ref stays set, so the internal role picker still works for switching roles.

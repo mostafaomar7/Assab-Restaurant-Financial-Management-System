@@ -18,6 +18,7 @@ import {
   type LoginOrChallenge,
 } from "../api/auth";
 import { getTokens, clearTokens } from "../api/tokens";
+import { clearEntrySelection } from "./entrySelection";
 import { disconnectEcho, getEcho } from "../api/echo";
 import type {
   AppNotification,
@@ -100,6 +101,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const handler = () => {
       setUser(null);
       setDefaultPage(null);
+      // Drop the pre-login dashboard/role pick so the next login re-routes cleanly
+      // (a stale selection would strand the next user in the wrong dashboard).
+      clearEntrySelection();
       disconnectEcho();
       queryClient.clear();
     };
@@ -324,9 +328,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setDefaultPage(null);
+      // Always drop the pre-login pick — otherwise App's redirect effect would
+      // immediately re-route the (now logged-out) browser back into a dashboard.
+      clearEntrySelection();
       disconnectEcho();
+      queryClient.clear();
     }
-  }, []);
+  }, [queryClient]);
 
   const refreshMe = useCallback(async () => {
     const me = await fetchMe();

@@ -15042,7 +15042,15 @@ export function ASABPrototype() {
   }, [apiOps, headPendingOps, headFinalOps, headRejectedOps, isHead]);
 
   const { logout: authLogout } = useAuth();
-  const login = (role:RoleId) => setAppState({ role, page:ROLE_PROFILES[role].defaultPage, detailId:null, modal:null });
+  // Tag the current history entry with a page so Back/Forward can restore it.
+  const tagShiftHistory = (p:string, replace=false) => {
+    try {
+      const st = { ...(window.history.state || {}), asabPage: p };
+      if (replace) window.history.replaceState(st, "");
+      else window.history.pushState(st, "");
+    } catch { /* history unavailable */ }
+  };
+  const login = (role:RoleId) => { const p = ROLE_PROFILES[role].defaultPage; setAppState({ role, page:p, detailId:null, modal:null }); tagShiftHistory(p, true); };
   // Full sign-out: clear the pre-login entry selection + the auth session so the user returns
   // to the entry flow (dashboard → role → login), not the in-mockup role picker.
   const logout = () => {
@@ -15062,9 +15070,19 @@ export function ASABPrototype() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appState.role]);
-  const navigate = (page:PageId) => setAppState(s=>({...s, page, modal:null}));
+  const navigate = (page:PageId) => { setAppState(s=>({...s, page, modal:null})); tagShiftHistory(page); };
   const setModal = (modal:string|null) => setAppState(s=>({...s, modal}));
   const setDetailId = (detailId:string|null) => setAppState(s=>({...s, detailId}));
+
+  // Browser Back/Forward → restore the previous internal page (URL stays on the preview hash).
+  useEffect(() => {
+    const onPop = (e:PopStateEvent) => {
+      const p = (e.state as { asabPage?: string } | null)?.asabPage;
+      if (typeof p === "string") setAppState(s=>({...s, page:p as PageId, modal:null}));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
   // ─── FINANCIAL STATE MACHINE ─────────────────────────────
   // pending  → approved           (accountant, records actor + time)

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
 import { forgotPassword, resetPassword } from "../api/auth";
 import { getErrorMessage } from "../api/errors";
+import { V, G, FONT } from "./authTheme";
 
 type Step = "request" | "reset" | "done";
 
@@ -57,28 +58,16 @@ export function ForgotPasswordPage({ onDone }: Props) {
   }
 
   return (
-    <div
-      dir="rtl"
-      style={{
-        minHeight: "100vh",
-        background:
-          "linear-gradient(145deg, #0A1628 0%, #0F1C35 40%, #1B3A6B 100%)",
-        fontFamily:
-          "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-      }}
-    >
+    <div dir="rtl" style={{ width: "100%", display: "flex", justifyContent: "center", fontFamily: FONT }}>
       <div
         style={{
           width: "100%",
           maxWidth: 440,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(124,58,237,0.25)",
+          background: "#fff",
+          border: `1px solid ${G[200]}`,
           borderRadius: 20,
-          padding: "36px 32px",
+          padding: "34px 32px",
+          boxShadow: "0 24px 60px -24px rgba(16,24,40,0.18)",
         }}
       >
         <div style={{ textAlign: "center", marginBottom: 24 }}>
@@ -87,22 +76,22 @@ export function ForgotPasswordPage({ onDone }: Props) {
               width: 56,
               height: 56,
               borderRadius: 16,
-              background: "linear-gradient(135deg, #7C3AED, #00D9FF)",
+              background: `linear-gradient(135deg, ${V[600]}, ${V[800]})`,
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
               fontSize: 24,
-              fontWeight: 900,
               color: "white",
-              marginBottom: 12,
+              marginBottom: 14,
+              boxShadow: `0 10px 24px -10px ${V[700]}`,
             }}
           >
             🔐
           </div>
-          <h1 style={{ fontSize: 18, color: "white", margin: 0 }}>
-            {step === "done" ? "تم!" : "استعادة كلمة المرور"}
+          <h1 style={{ fontSize: 20, fontWeight: 800, color: G[900], margin: 0 }}>
+            {step === "done" ? "تم بنجاح" : "استعادة كلمة المرور"}
           </h1>
-          <p style={{ fontSize: 12, color: "#94a3b8", margin: "4px 0 0" }}>
+          <p style={{ fontSize: 13, color: G[500], margin: "6px 0 0" }}>
             {step === "request" && "أدخل بريدك لإرسال كود التحقق"}
             {step === "reset" && "أدخل الكود وكلمة المرور الجديدة"}
             {step === "done" && "تم تغيير كلمة المرور بنجاح"}
@@ -169,12 +158,13 @@ export function ForgotPasswordPage({ onDone }: Props) {
               width: "100%",
               padding: "12px",
               background: "transparent",
-              color: "#94a3b8",
+              color: G[500],
               border: "none",
-              fontSize: 12,
+              fontSize: 12.5,
               cursor: "pointer",
-              marginTop: 8,
+              marginTop: 10,
               fontFamily: "inherit",
+              fontWeight: 500,
             }}
           >
             رجوع لتسجيل الدخول
@@ -187,19 +177,19 @@ export function ForgotPasswordPage({ onDone }: Props) {
 
 const labelStyle: React.CSSProperties = {
   display: "block",
-  fontSize: 12,
-  color: "#cbd5e1",
-  marginBottom: 6,
+  fontSize: 12.5,
+  color: G[700],
+  marginBottom: 7,
   fontWeight: 600,
 };
 
 const inputStyle: React.CSSProperties = {
   width: "100%",
   padding: "12px 14px",
-  borderRadius: 10,
-  background: "rgba(255,255,255,0.06)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  color: "white",
+  borderRadius: 12,
+  background: "#fff",
+  border: `1.5px solid ${G[300]}`,
+  color: G[900],
   fontSize: 14,
   marginBottom: 18,
   outline: "none",
@@ -211,12 +201,13 @@ const inputStyle: React.CSSProperties = {
 const primaryBtn = (loading: boolean): React.CSSProperties => ({
   width: "100%",
   padding: "13px",
-  background: loading ? "rgba(124,58,237,0.5)" : "linear-gradient(135deg, #7C3AED, #00D9FF)",
+  background: loading ? G[300] : `linear-gradient(135deg, ${V[600]}, ${V[800]})`,
   color: "white",
   border: "none",
-  borderRadius: 10,
+  borderRadius: 12,
   fontSize: 14,
   fontWeight: 700,
   cursor: loading ? "wait" : "pointer",
   fontFamily: "inherit",
+  boxShadow: loading ? "none" : `0 10px 24px -10px ${V[700]}`,
 });

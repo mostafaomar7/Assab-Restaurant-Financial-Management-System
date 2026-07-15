@@ -51,313 +51,178 @@ export function LoginPage() {
     }
   }
 
+  // ─── Electric Violet + GreyScale tokens (matches the entry brand panel) ──────
+  const V600 = "#7C3AED", V700 = "#6D28D9", V800 = "#5B21B6";
+  const G200 = "#E4E7EC", G300 = "#D0D5DD", G400 = "#98A2B3", G500 = "#667085",
+    G600 = "#475467", G700 = "#344054", G900 = "#101828";
+  const FONT = "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif";
+
+  const inputBase = {
+    width: "100%",
+    padding: "12px 14px",
+    borderRadius: 12,
+    background: "#fff",
+    border: `1.5px solid ${G300}`,
+    color: G900,
+    fontSize: 14,
+    outline: "none",
+    direction: "ltr" as const,
+    textAlign: "right" as const,
+    fontFamily: "inherit",
+    transition: "border-color .15s ease, box-shadow .15s ease",
+  };
+  const focusOn = (e: { currentTarget: HTMLInputElement }) => {
+    e.currentTarget.style.borderColor = V600;
+    e.currentTarget.style.boxShadow = `0 0 0 4px ${V600}1f`;
+  };
+  const focusOff = (e: { currentTarget: HTMLInputElement }) => {
+    e.currentTarget.style.borderColor = G300;
+    e.currentTarget.style.boxShadow = "none";
+  };
+  const labelStyle = { display: "block", fontSize: 12.5, color: G700, marginBottom: 7, fontWeight: 600 } as const;
+
   return (
-    <div
+    <form
+      onSubmit={handleSubmit}
       dir="rtl"
       style={{
-        minHeight: "100vh",
-        background:
-          "linear-gradient(145deg, #0A1628 0%, #0F1C35 40%, #1B3A6B 100%)",
-        fontFamily:
-          "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "24px",
+        width: "100%",
+        maxWidth: 440,
+        margin: "0 auto",
+        background: "#fff",
+        border: `1px solid ${G200}`,
+        borderRadius: 20,
+        padding: "34px 32px",
+        boxShadow: "0 24px 60px -24px rgba(16,24,40,0.18)",
+        fontFamily: FONT,
       }}
     >
-      <form
-        onSubmit={handleSubmit}
-        style={{
-          width: "100%",
-          maxWidth: 420,
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid rgba(124,58,237,0.25)",
-          borderRadius: 20,
-          padding: "36px 32px",
-          boxShadow: "0 20px 60px rgba(0,0,0,0.4)",
-        }}
-      >
-        {/* Logo */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 12,
-            marginBottom: 24,
-          }}
-        >
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              background: "linear-gradient(135deg, #7C3AED, #00D9FF)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 24,
-              fontWeight: 900,
-              color: "white",
-            }}
-          >
-            ع
-          </div>
-          <div style={{ textAlign: "right" }}>
-            <div
-              style={{
-                fontSize: 28,
-                fontWeight: 900,
-                color: "white",
-                lineHeight: 1,
-              }}
-            >
-              عصب{" "}
-              <span style={{ color: "#00D9FF", fontFamily: "system-ui" }}>
-                ASAB
-              </span>
-            </div>
-            <div style={{ fontSize: 12, color: "#64748b", marginTop: 4 }}>
-              نظام الإدارة المالية
-            </div>
-          </div>
-        </div>
+      <h1 style={{ fontSize: 22, color: G900, fontWeight: 800, margin: "0 0 6px" }}>تسجيل الدخول</h1>
+      <p style={{ fontSize: 13.5, color: G500, margin: "0 0 26px" }}>أدخل بياناتك للوصول إلى لوحة التحكم</p>
 
-        <h1
-          style={{
-            fontSize: 18,
-            color: "white",
-            fontWeight: 700,
-            margin: "0 0 4px",
-            textAlign: "center",
-          }}
-        >
-          تسجيل الدخول
-        </h1>
-        <p
-          style={{
-            fontSize: 13,
-            color: "#94a3b8",
-            margin: "0 0 28px",
-            textAlign: "center",
-          }}
-        >
-          أدخل بياناتك للوصول إلى لوحة التحكم
-        </p>
+      {/* Email */}
+      <label style={labelStyle}>البريد الإلكتروني</label>
+      <input
+        type="email"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        onFocus={focusOn}
+        onBlur={focusOff}
+        autoComplete="email"
+        autoFocus
+        required
+        disabled={loggingIn}
+        placeholder="name@example.com"
+        style={{ ...inputBase, marginBottom: 18 }}
+      />
 
-        {/* Email */}
-        <label
-          style={{
-            display: "block",
-            fontSize: 12,
-            color: "#cbd5e1",
-            marginBottom: 6,
-            fontWeight: 600,
-          }}
-        >
-          البريد الإلكتروني
-        </label>
+      {/* Password */}
+      <label style={labelStyle}>كلمة المرور</label>
+      <div style={{ position: "relative", marginBottom: 24 }}>
         <input
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          autoComplete="email"
-          autoFocus
+          type={showPassword ? "text" : "password"}
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onFocus={focusOn}
+          onBlur={focusOff}
+          autoComplete="current-password"
           required
           disabled={loggingIn}
-          placeholder="name@example.com"
-          style={{
-            width: "100%",
-            padding: "12px 14px",
-            borderRadius: 10,
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.12)",
-            color: "white",
-            fontSize: 14,
-            marginBottom: 18,
-            outline: "none",
-            direction: "ltr",
-            textAlign: "right",
-            fontFamily: "inherit",
-          }}
+          style={{ ...inputBase, paddingInlineStart: 52 }}
         />
-
-        {/* Password */}
-        <label
-          style={{
-            display: "block",
-            fontSize: 12,
-            color: "#cbd5e1",
-            marginBottom: 6,
-            fontWeight: 600,
-          }}
-        >
-          كلمة المرور
-        </label>
-        <div style={{ position: "relative", marginBottom: 24 }}>
-          <input
-            type={showPassword ? "text" : "password"}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            required
-            disabled={loggingIn}
-            style={{
-              width: "100%",
-              padding: "12px 14px",
-              paddingInlineStart: 44,
-              borderRadius: 10,
-              background: "rgba(255,255,255,0.06)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              color: "white",
-              fontSize: 14,
-              outline: "none",
-              direction: "ltr",
-              textAlign: "right",
-              fontFamily: "inherit",
-            }}
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword((v) => !v)}
-            tabIndex={-1}
-            style={{
-              position: "absolute",
-              insetInlineStart: 8,
-              top: "50%",
-              transform: "translateY(-50%)",
-              background: "transparent",
-              border: "none",
-              color: "#94a3b8",
-              cursor: "pointer",
-              fontSize: 11,
-              padding: "4px 8px",
-            }}
-          >
-            {showPassword ? "إخفاء" : "إظهار"}
-          </button>
-        </div>
-
-        {/* 2FA OTP — shown only after a step-up challenge */}
-        {twoFactorToken && (
-          <>
-            <label
-              style={{
-                display: "block",
-                fontSize: 12,
-                color: "#cbd5e1",
-                marginBottom: 6,
-                fontWeight: 600,
-              }}
-            >
-              رمز التحقق الثنائي
-            </label>
-            <input
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              autoFocus
-              placeholder="------"
-              disabled={loggingIn}
-              style={{
-                width: "100%",
-                padding: "12px 14px",
-                borderRadius: 10,
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(124,58,237,0.4)",
-                color: "white",
-                fontSize: 18,
-                letterSpacing: 6,
-                marginBottom: 24,
-                outline: "none",
-                direction: "ltr",
-                textAlign: "center",
-                fontFamily: "inherit",
-              }}
-            />
-          </>
-        )}
-
-        {/* Submit */}
-        <button
-          type="submit"
-          disabled={loggingIn}
-          style={{
-            width: "100%",
-            padding: "13px",
-            background: loggingIn
-              ? "rgba(124,58,237,0.5)"
-              : "linear-gradient(135deg, #7C3AED, #00D9FF)",
-            color: "white",
-            border: "none",
-            borderRadius: 10,
-            fontSize: 15,
-            fontWeight: 700,
-            cursor: loggingIn ? "wait" : "pointer",
-            fontFamily: "inherit",
-            transition: "transform 0.15s",
-          }}
-        >
-          {loggingIn
-            ? "جاري الدخول..."
-            : twoFactorToken
-              ? "تأكيد الرمز"
-              : "تسجيل الدخول"}
-        </button>
-
         <button
           type="button"
-          onClick={() => setForgotting(true)}
+          onClick={() => setShowPassword((v) => !v)}
+          tabIndex={-1}
           style={{
-            display: "block",
-            width: "100%",
+            position: "absolute",
+            insetInlineStart: 8,
+            top: "50%",
+            transform: "translateY(-50%)",
             background: "transparent",
             border: "none",
-            color: "#94a3b8",
-            fontSize: 12,
+            color: G400,
             cursor: "pointer",
-            marginTop: 14,
-            fontFamily: "inherit",
-          }}
-        >
-          نسيت كلمة المرور؟
-        </button>
-
-        <button
-          type="button"
-          onClick={() => (window.location.hash = "#/onboarding")}
-          style={{
-            display: "block",
-            width: "100%",
-            background: "transparent",
-            border: "1px solid rgba(124,58,237,0.3)",
-            color: "#a78bfa",
-            fontSize: 12,
-            cursor: "pointer",
-            marginTop: 12,
-            padding: "10px",
-            borderRadius: 10,
-            fontFamily: "inherit",
-            fontWeight: 600,
-          }}
-        >
-          تسجيل شركة جديدة
-        </button>
-
-        <p
-          style={{
             fontSize: 11,
-            color: "#475569",
-            textAlign: "center",
-            marginTop: 22,
-            marginBottom: 0,
+            fontWeight: 600,
+            padding: "4px 8px",
+            fontFamily: "inherit",
           }}
         >
-          عصب ASAB · نظام إدارة مالية المطاعم
-        </p>
-      </form>
-    </div>
+          {showPassword ? "إخفاء" : "إظهار"}
+        </button>
+      </div>
+
+      {/* 2FA OTP — shown only after a step-up challenge */}
+      {twoFactorToken && (
+        <>
+          <label style={labelStyle}>رمز التحقق الثنائي</label>
+          <input
+            value={otpCode}
+            onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
+            onFocus={focusOn}
+            onBlur={focusOff}
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            autoFocus
+            placeholder="------"
+            disabled={loggingIn}
+            style={{ ...inputBase, borderColor: V600, fontSize: 20, letterSpacing: 8, textAlign: "center", marginBottom: 24 }}
+          />
+        </>
+      )}
+
+      {/* Submit */}
+      <button
+        type="submit"
+        disabled={loggingIn}
+        style={{
+          width: "100%",
+          padding: "13px",
+          background: loggingIn ? G300 : `linear-gradient(135deg, ${V600}, ${V800})`,
+          color: "white",
+          border: "none",
+          borderRadius: 12,
+          fontSize: 15,
+          fontWeight: 700,
+          cursor: loggingIn ? "wait" : "pointer",
+          fontFamily: "inherit",
+          boxShadow: loggingIn ? "none" : `0 10px 24px -10px ${V700}`,
+          transition: "transform .15s ease, box-shadow .15s ease",
+        }}
+        onMouseEnter={(e) => { if (!loggingIn) e.currentTarget.style.transform = "translateY(-1px)"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; }}
+      >
+        {loggingIn ? "جاري الدخول..." : twoFactorToken ? "تأكيد الرمز" : "تسجيل الدخول"}
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setForgotting(true)}
+        style={{ display: "block", width: "100%", background: "transparent", border: "none", color: G500, fontSize: 12.5, cursor: "pointer", marginTop: 16, fontFamily: "inherit", fontWeight: 500 }}
+      >
+        نسيت كلمة المرور؟
+      </button>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0" }}>
+        <div style={{ flex: 1, height: 1, background: G200 }} />
+        <span style={{ fontSize: 11, color: G400 }}>أو</span>
+        <div style={{ flex: 1, height: 1, background: G200 }} />
+      </div>
+
+      <button
+        type="button"
+        onClick={() => (window.location.hash = "#/onboarding")}
+        style={{ display: "block", width: "100%", background: "#fff", border: `1.5px solid ${V600}33`, color: V700, fontSize: 13, cursor: "pointer", padding: "11px", borderRadius: 12, fontFamily: "inherit", fontWeight: 700 }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = "#F5F3FF"; }}
+        onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
+      >
+        تسجيل شركة جديدة
+      </button>
+
+      <p style={{ fontSize: 11, color: G400, textAlign: "center", marginTop: 22, marginBottom: 0 }}>
+        عصب ASAB · نظام إدارة مالية المطاعم
+      </p>
+    </form>
   );
 }
