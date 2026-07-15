@@ -11058,6 +11058,13 @@ function AdminRestaurants({}: PageProps) {
   const setBranchAsset = (key:string) => setBranchAssets(p=>({...p,[key]:true}));
   const [uploadRestFilter,  setUploadRestFilter]  = useState("");
   const [uploadBrandFilter, setUploadBrandFilter] = useState("");
+  // The seeded default id ("reem") rarely matches a real API brand — once brands
+  // load, point the upload tab at the first real brand so it doesn't white-screen
+  // on an undefined selBrand.
+  useEffect(() => {
+    if (BRANDS.length && !BRANDS.some(b=>b.id===uploadBrand)) setUploadBrand(BRANDS[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brandsApi]);
 
   // Per-restaurant subscription state
   type RestSub = { plan:"فضي"|"ذهبي"|"بلاتيني"; status:"active"|"warning"|"danger"|"expired"; expires:string; daysLeft:number; price:number };
@@ -11113,7 +11120,16 @@ function AdminRestaurants({}: PageProps) {
 
       {/* ── Upload Tab ── */}
       {restTab==="upload" && (()=>{
-        const selBrand = BRANDS.find(b=>b.id===uploadBrand)!;
+        // Fall back to the first brand and bail out cleanly when there are none —
+        // guards the transient render before the sync effect fires and the empty case.
+        const selBrand = BRANDS.find(b=>b.id===uploadBrand) ?? BRANDS[0];
+        if (!selBrand) {
+          return (
+            <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10 text-center text-gray-400 text-sm">
+              {t("لا توجد علامات تجارية لرفع بياناتها بعد","No brands available to upload data for yet")}
+            </div>
+          );
+        }
         const ups = brandUploads[uploadBrand] ?? { sales:false, materials:false, employees:false, suppliers:false };
 
         // per-restaurant employee upload state
