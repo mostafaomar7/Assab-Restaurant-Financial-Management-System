@@ -53,6 +53,13 @@ import {
   // T06 purchases wiring
   usePurchasesList, usePurchaseDetail, useDocumentOperation, usePatchPurchaseLine,
   useSuppliers, usePurchaseReturns, usePurchaseEnums,
+  // T14 company-portal wiring
+  useTransferBranchManager, useCompanyInvitations, useResendCompanyInvitation,
+  useRevokeCompanyInvitation, useResendCompanyUserInvite,
+  useSsoConfig, useUpdateSso, useDisableSso,
+  // T15 report builder
+  useReportBuilderFields, usePreviewBuilderReport, useSaveBuilderReport,
+  useSavedBuilderReports, useRunSavedBuilderReport,
 } from "../../../api/queries";
 import type { Operation as ApiOperation } from "../../../api/types";
 import type {
@@ -62,6 +69,7 @@ import type {
   Shift, ShiftConfig,
   Employee as ApiEmployee, EmployeeMovementCategory, CashCustodyRow,
 } from "../../../api/types/company";
+import { isApiError } from "../../../api/errors";
 import { NotificationBell } from "../../shared/NotificationBell";
 import { RejectModal } from "../../shared/RejectModal";
 import { ClarifyModal } from "../../shared/ClarifyModal";
@@ -1559,8 +1567,11 @@ function CASubscription() {
   const branchesMax  = usage.branches?.max  ?? 0;
   const usersUsed    = usage.users?.used    ?? 0;
   const usersMax     = usage.users?.max     ?? 0;
-  const storageUsed  = usage.storageGB?.used ?? 0;
-  const storageMax   = usage.storageGB?.max  ?? 0;
+  // T14.4 — storage quota is now `usage.storage {used, max(GB)}` (max null = unlimited).
+  // Fall back to the legacy `storageGB` key for older payloads.
+  const storageMeter = usage.storage ?? usage.storageGB;
+  const storageUsed  = storageMeter?.used ?? 0;
+  const storageMax   = storageMeter?.max ?? null; // null → unlimited («∞»)
   const currentPlanName = apiSub?.planName ?? "Professional";
   const currentPlanPriceAnnual = (apiPlans.find(p => p.isCurrent)?.priceAnnualHalalas != null)
     ? Math.round((apiPlans.find(p => p.isCurrent)!.priceAnnualHalalas as number) / 100)
@@ -1588,9 +1599,12 @@ function CASubscription() {
           <p className="text-2xl font-black">{billing==="annual"?fmt(currentPlanPriceAnnual):fmt(currentPlanPriceMonthly)} <span className="text-sm font-normal text-white/60">{SAR}/{billing==="annual"?perYear:perMonth}</span></p>
         </div>
         <div className="p-5 grid grid-cols-3 gap-4">
-          {[[t("الفروع","Branches"),branchesUsed,branchesMax,"bg-blue-500"],[t("المستخدمون","Users"),usersUsed,usersMax,"bg-purple-500"],[t("التخزين (GB)","Storage (GB)"),storageUsed,storageMax,"bg-emerald-500"]].map(([l,u,m,c])=>(
-            <div key={String(l)}><div className="flex justify-between mb-1.5 text-xs font-semibold text-gray-600"><span>{l}</span><span>{u}/{m}</span></div><div className="w-full h-2 bg-gray-100 rounded-full"><div className={`h-2 rounded-full ${c}`} style={{width:`${Math.round((Number(u)/Number(m))*100)}%`}}/></div></div>
-          ))}
+          {([[t("الفروع","Branches"),branchesUsed,branchesMax,"bg-blue-500"],[t("المستخدمون","Users"),usersUsed,usersMax,"bg-purple-500"],[t("التخزين (GB)","Storage (GB)"),storageUsed,storageMax,"bg-emerald-500"]] as [string,number,number|null,string][]).map(([l,u,m,c])=>{
+            const unlimited = m === null || m === undefined;   // T14.4 — unlimited plan → «/∞»
+            const pct = unlimited || Number(m) <= 0 ? 0 : Math.min(100, Math.round((Number(u)/Number(m))*100));
+            return (
+            <div key={String(l)}><div className="flex justify-between mb-1.5 text-xs font-semibold text-gray-600"><span>{l}</span><span>{u}/{unlimited?"∞":m}</span></div><div className="w-full h-2 bg-gray-100 rounded-full"><div className={`h-2 rounded-full ${c}`} style={{width:`${pct}%`}}/></div></div>
+          );})}
         </div>
       </div>
       <div className="grid grid-cols-3 gap-4">
@@ -1614,9 +1628,15 @@ function CAUsers() {
   const { t, dir } = useCLang();
   type U = { id:string;name:string;role:string;branch:string;email:string;status:"active"|"inactive";last:string };
   const { data: apiUsers = [] } = useCompanyUsers();
+  const { data: apiInvites = [] } = useCompanyInvitations();
   const toggleMut = useToggleCompanyUserStatus();
   const inviteMut = useCreateCompanyInvitation();
   const updateUserMut = useUpdateCompanyUser();
+  const resendInviteMut = useResendCompanyInvitation();  // T14.2 — re-email + extend expiry
+  const revokeInviteMut = useRevokeCompanyInvitation();
+  // T14.2 — pending invitations are email-only; no token is exposed by the API.
+  const pendingInvites = (apiInvites as any[]).filter(i=>i.status==="pending");
+  const ROLE_AR: Record<string,string> = { head:"رئيس الحسابات", accountant:"محاسب", branch:"مدير فرع", procurement:"مدير مشتريات" };
   // Driven by GET /company/me/users. No static seed.
   const [localUsers,setLocalUsers]=useState<U[]>([]);
   const users: U[] = apiUsers.map((u): U => ({
@@ -1654,6 +1674,22 @@ function CAUsers() {
         <Btn variant="primary" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة مستخدم","Add User")}</Btn>
       </div>
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4"><div className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2"><Search size={13} className="text-gray-400"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder={t("بحث...","Search...")} className="flex-1 text-sm outline-none"/></div></div>
+      {pendingInvites.length>0&&(
+        <div className="bg-white rounded-xl border border-amber-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-3 bg-amber-50/60 border-b border-amber-100 flex items-center gap-2"><Send size={13} className="text-amber-600"/><span className="text-xs font-bold text-amber-700">{t("دعوات معلّقة","Pending Invitations")} — {pendingInvites.length}</span></div>
+          {pendingInvites.map((inv:any)=>(
+            <div key={inv.id} className="px-5 py-3 flex items-center gap-4 border-b border-gray-50 last:border-0">
+              <div className="w-9 h-9 rounded-xl bg-amber-100 flex items-center justify-center text-amber-700 flex-shrink-0"><Send size={14}/></div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 flex-wrap"><span className="text-sm font-semibold text-gray-800" dir="ltr">{inv.email}</span><Badge className="bg-purple-50 text-purple-700 text-[10px]">{ROLE_AR[inv.roleKey]||inv.roleKey}</Badge></div>
+                <p className="text-[10px] text-gray-400 mt-0.5">{t("بانتظار القبول","Awaiting acceptance")}{inv.expiresAt&&` · ${t("تنتهي","expires")} ${String(inv.expiresAt).slice(0,10)}`}</p>
+              </div>
+              <button onClick={()=>resendInviteMut.mutate(inv.id)} disabled={resendInviteMut.isPending} className="px-3 py-1.5 rounded-lg text-[11px] font-bold border bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100 flex items-center gap-1"><RefreshCw size={11}/> {t("إعادة إرسال","Resend")}</button>
+              <button onClick={()=>{ if(window.confirm(t("إلغاء الدعوة؟","Revoke invitation?"))) revokeInviteMut.mutate(inv.id); }} disabled={revokeInviteMut.isPending} className="px-3 py-1.5 rounded-lg text-[11px] font-bold border bg-gray-50 border-gray-200 text-gray-600 hover:bg-red-50 hover:text-red-600">{t("إلغاء","Revoke")}</button>
+            </div>
+          ))}
+        </div>
+      )}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         {shown.map(u=>(
           <div key={u.id} className="px-5 py-4 flex items-center gap-4 border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
@@ -1677,6 +1713,7 @@ function CAUsers() {
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الاسم الكامل","Full Name")}</label><input value={inviteForm.name} onChange={e=>setInviteForm(f=>({...f,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"/></div>
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("البريد الإلكتروني","Email")}</label><input value={inviteForm.email} onChange={e=>setInviteForm(f=>({...f,email:e.target.value}))} dir="ltr" placeholder="email@company.sa" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"/></div>
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الدور","Role")}</label><select value={inviteForm.role} onChange={e=>setInviteForm(f=>({...f,role:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"><option value="head">رئيس الحسابات</option><option value="accountant">محاسب</option><option value="branch">مدير فرع</option><option value="procurement">مدير مشتريات</option></select></div>
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-[11px] text-blue-700">{t("يُرسَل رابط الدعوة إلى بريد المدعوّ مباشرةً.","An invitation link is emailed directly to the invitee.")}</div>
               <div className="flex gap-2 justify-end"><Btn onClick={()=>setShowAdd(false)}>{t("إلغاء","Cancel")}</Btn><Btn variant="primary" onClick={submitInvite} disabled={!inviteForm.email.trim()||inviteMut.isPending}><Send size={13}/> {t("إرسال دعوة","Send Invite")}</Btn></div>
             </div>
           </div>
@@ -1689,9 +1726,11 @@ function CAUsers() {
 function CABranches() {
   const { t, dir } = useCLang();
   const { data: apiBrandsTree = [] } = useCompanyBrands();
+  const { data: members = [] } = useCompanyUsers();
   const createBranchMut = useCreateBranch();
+  const transferMut = useTransferBranchManager();
   // Brand → restaurant → branch tree driven entirely by GET /company/me/brands.
-  type BTBranch = { id:string; name:string; city:string; mgr:string; salesM:number; target:number };
+  type BTBranch = { id:string; name:string; city:string; mgr:string; mgrUserId?:string; salesM:number; target:number; reviewStatus?:string };
   type BTRest = { id:string; name:string; branches:BTBranch[] };
   type BTBrand = { id:string; name:string; abbr:string; color:string; restaurants:BTRest[] };
   const brandsTree: BTBrand[] = (apiBrandsTree as any[]).map((b:any)=>({
@@ -1699,23 +1738,40 @@ function CABranches() {
     restaurants: (b.restaurants ?? []).map((r:any):BTRest=>({
       id: r.id, name: r.name,
       branches: (r.branches ?? []).map((br:any):BTBranch=>({
-        id: br.id, name: br.name, city: br.city ?? "", mgr: br.managerName ?? "—",
+        id: br.id, name: br.name, city: br.city ?? "", mgr: br.managerName ?? "—", mgrUserId: br.managerUserId,
         salesM: Math.round((br.monthlySalesHalalas ?? 0)/100),
         target: Math.round((br.monthlyTargetHalalas ?? 0)/100),
+        reviewStatus: br.reviewStatus, // T14.1 — pending_review | approved | rejected
       })),
     })),
   }));
   const allBranchesTree: BTBranch[] = brandsTree.flatMap(b=>b.restaurants.flatMap(r=>r.branches));
+  const activeBranchesCount = allBranchesTree.filter(b=>b.reviewStatus!=="pending_review"&&b.reviewStatus!=="rejected").length;
+  const pendingCount = allBranchesTree.filter(b=>b.reviewStatus==="pending_review").length;
   const [expandedBrand,setExpandedBrand]=useState<string>("");
   const totalSales=allBranchesTree.reduce((s:number,b:any)=>s+b.salesM,0);
   const [showAddBranch,setShowAddBranch]=useState(false);
   const [newBranchName,setNewBranchName]=useState("");
   const [newBranchBrand,setNewBranchBrand]=useState("");
   const [newBranchCity,setNewBranchCity]=useState("الرياض");
+  // T14.6 — transfer-manager modal state.
+  const [transferFor,setTransferFor]=useState<{id:string;name:string}|null>(null);
+  const [newMgrUserId,setNewMgrUserId]=useState("");
+  const submitTransfer=()=>{
+    if(!transferFor||!newMgrUserId)return;
+    transferMut.mutate({ id: transferFor.id, newManagerUserId: newMgrUserId } as any,
+      { onSuccess: ()=>{ setTransferFor(null); setNewMgrUserId(""); } });
+  };
+  // T14.1 — per-branch review badge.
+  const reviewBadge=(rs?:string)=> rs==="pending_review"
+    ? <Badge className="bg-amber-50 text-amber-700 text-[9px]">{t("قيد المراجعة","Pending review")}</Badge>
+    : rs==="rejected"
+    ? <Badge className="bg-red-50 text-red-700 text-[9px]">{t("مرفوض","Rejected")}</Badge>
+    : null;
   return (
     <div className="space-y-5" dir={dir}>
       <div className="flex items-center justify-between">
-        <div><h2 className="text-xl font-bold text-gray-800">{t("العلامات التجارية والفروع","Brands & Branches")}</h2><p className="text-gray-400 text-sm">{brandsTree.length} {t("علامات","brands")} · {allBranchesTree.length} {t("فرع","branches")}</p></div>
+        <div><h2 className="text-xl font-bold text-gray-800">{t("العلامات التجارية والفروع","Brands & Branches")}</h2><p className="text-gray-400 text-sm">{brandsTree.length} {t("علامات","brands")} · {allBranchesTree.length} {t("فرع","branches")}{pendingCount>0&&<span className="text-amber-600"> · {pendingCount} {t("قيد المراجعة","pending review")}</span>}</p></div>
         <Btn variant="primary" onClick={()=>setShowAddBranch(true)}><Plus size={13}/> {t("إضافة فرع","Add Branch")}</Btn>
       </div>
       {showAddBranch&&(
@@ -1726,7 +1782,26 @@ function CABranches() {
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("اسم الفرع","Branch Name")}</label><input value={newBranchName} onChange={e=>setNewBranchName(e.target.value)} placeholder={t("مثال: فرع حي الياسمين...","e.g. Al-Yasmin district branch...")} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("العلامة التجارية","Brand")}</label><select value={newBranchBrand} onChange={e=>setNewBranchBrand(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"><option value="">{t("اختر علامة","Select brand")}</option>{brandsTree.map(b=><option key={b.id}>{b.name}</option>)}</select></div>
               <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("المدينة","City")}</label><select value={newBranchCity} onChange={e=>setNewBranchCity(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"><option>الرياض</option><option>جدة</option><option>الدمام</option><option>مكة المكرمة</option></select></div>
-              <div className="flex gap-2 justify-end pt-1"><Btn onClick={()=>setShowAddBranch(false)}>{t("إلغاء","Cancel")}</Btn><Btn variant="primary" onClick={()=>{if(!newBranchName){alert(t("أدخل اسم الفرع","Enter branch name"));return;}createBranchMut.mutate({ restaurantId: brandsTree.find(b=>b.name===newBranchBrand)?.restaurants[0]?.id || "", name: newBranchName, city: newBranchCity });setShowAddBranch(false);setNewBranchName("");}}><Plus size={13}/> {t("إضافة","Add")}</Btn></div>
+              <div className="bg-amber-50 border border-amber-100 rounded-xl px-3 py-2 text-[11px] text-amber-700">{t("يُنشأ الفرع كطلب قيد المراجعة، ويظهر بعد اعتماد الإدارة.","The branch is created as a pending request and appears after admin approval.")}</div>
+              <div className="flex gap-2 justify-end pt-1"><Btn onClick={()=>setShowAddBranch(false)}>{t("إلغاء","Cancel")}</Btn><Btn variant="primary" onClick={()=>{if(!newBranchName){alert(t("أدخل اسم الفرع","Enter branch name"));return;}createBranchMut.mutate({ restaurantId: brandsTree.find(b=>b.name===newBranchBrand)?.restaurants[0]?.id || "", name: newBranchName, city: newBranchCity });setShowAddBranch(false);setNewBranchName("");}}><Plus size={13}/> {t("إرسال للمراجعة","Submit for review")}</Btn></div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* T14.6 — transfer branch manager to another active company member. */}
+      {transferFor&&(
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setTransferFor(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()} dir={dir}>
+            <div className="flex items-center justify-between mb-4"><h3 className="font-bold text-gray-800">{t("نقل مدير الفرع","Transfer Branch Manager")} — {transferFor.name}</h3><button onClick={()=>setTransferFor(null)} className="text-gray-400 hover:text-gray-600"><X size={18}/></button></div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("المدير الجديد","New Manager")}</label>
+                <select value={newMgrUserId} onChange={e=>setNewMgrUserId(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400">
+                  <option value="">{t("— اختر عضواً —","— Select a member —")}</option>
+                  {(members as any[]).filter(m=>m.status==="active").map((m:any)=><option key={m.id} value={m.id}>{m.name} · {m.roleLabel||m.roleKey}</option>)}
+                </select>
+              </div>
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 text-[11px] text-blue-700">{t("يجب أن يكون المدير الجديد عضواً نشطاً في الشركة؛ سيُنقل نطاق بياناته للفرع.","The new manager must be an active company member; their data scope moves to this branch.")}</div>
+              <div className="flex gap-2 justify-end pt-1"><Btn onClick={()=>setTransferFor(null)}>{t("إلغاء","Cancel")}</Btn><Btn variant="primary" onClick={submitTransfer} disabled={!newMgrUserId||transferMut.isPending}><ArrowLeftRight size={13}/> {t("نقل","Transfer")}</Btn></div>
             </div>
           </div>
         </div>
@@ -1734,7 +1809,7 @@ function CABranches() {
       <div className="grid grid-cols-4 gap-4">
         <KpiCard label={t("العلامات التجارية","Brands")}           value={String(brandsTree.length)} sub={t("تحت إدارة المجموعة","Under group management")} icon={<Star size={18} className="text-amber-600"/>} accent="amber"/>
         <KpiCard label={t("إجمالي المطاعم","Total Restaurants")}  value={String(brandsTree.reduce((s,b)=>s+b.restaurants.length,0))} sub={t("مطعم","restaurant")} icon={<Home size={18} className="text-blue-600"/>} accent="blue"/>
-        <KpiCard label={t("الفروع النشطة","Active Branches")}     value={String(allBranchesTree.length)} sub={t("فرع","branches")} icon={<Building2 size={18} className="text-emerald-600"/>} accent="emerald"/>
+        <KpiCard label={t("الفروع النشطة","Active Branches")}     value={String(activeBranchesCount)} sub={pendingCount>0?`+${pendingCount} ${t("قيد المراجعة","pending")}`:t("فرع","branches")} icon={<Building2 size={18} className="text-emerald-600"/>} accent="emerald"/>
         <KpiCard label={t("إجمالي مبيعات شهرية","Monthly Sales")} value={`${fmt(Math.round(totalSales/1000))}K`} sub={t("ر.س","SAR")} icon={<TrendingUp size={18} className="text-purple-600"/>} accent="purple"/>
       </div>
       <div className="space-y-3">
@@ -1756,13 +1831,19 @@ function CABranches() {
                     <p className="text-xs font-bold text-gray-500 mb-2">{rest.name}</p>
                     <div className="space-y-2">
                       {rest.branches.map(br=>{
-                        const pct=Math.round((br.salesM/br.target)*100);
+                        const pct=br.target>0?Math.round((br.salesM/br.target)*100):0;
+                        const pending=br.reviewStatus==="pending_review"||br.reviewStatus==="rejected";
                         return (
-                          <div key={br.id} className="flex items-center gap-4 px-3 py-2.5 bg-gray-50 rounded-lg">
-                            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:brand.color}}>{br.city[0]}</div>
-                            <div className="flex-1 min-w-0"><p className="font-semibold text-gray-700 text-xs">{br.name}</p><p className="text-[10px] text-gray-400">{t("م.الفرع:","Mgr:")} {br.mgr} · {br.city}</p></div>
-                            <div className="w-28 flex-shrink-0"><div className="flex justify-between text-[10px] text-gray-400 mb-1"><span>{pct}%</span></div><div className="w-full h-1.5 bg-gray-200 rounded-full"><div className={`h-1.5 rounded-full ${pct>=100?"bg-emerald-500":pct>=80?"bg-blue-500":"bg-amber-500"}`} style={{width:`${Math.min(100,pct)}%`}}/></div></div>
-                            <p className="font-mono font-bold text-gray-700 text-xs flex-shrink-0">{fmt(br.salesM)} {t("ر.س","SAR")}</p>
+                          <div key={br.id} className={`flex items-center gap-4 px-3 py-2.5 rounded-lg ${pending?"bg-amber-50/40":"bg-gray-50"}`}>
+                            <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-xs font-bold flex-shrink-0" style={{background:pending?"#d1d5db":brand.color}}>{(br.city||br.name||"?")[0]}</div>
+                            <div className="flex-1 min-w-0"><div className="flex items-center gap-1.5"><p className="font-semibold text-gray-700 text-xs truncate">{br.name}</p>{reviewBadge(br.reviewStatus)}</div><p className="text-[10px] text-gray-400">{t("م.الفرع:","Mgr:")} {br.mgr} · {br.city}</p></div>
+                            {pending ? (
+                              <span className="text-[10px] text-amber-600 flex-shrink-0">{br.reviewStatus==="rejected"?t("لم يُعتمد","Not approved"):t("بانتظار اعتماد الإدارة","Awaiting admin approval")}</span>
+                            ) : (<>
+                              <div className="w-28 flex-shrink-0"><div className="flex justify-between text-[10px] text-gray-400 mb-1"><span>{pct}%</span></div><div className="w-full h-1.5 bg-gray-200 rounded-full"><div className={`h-1.5 rounded-full ${pct>=100?"bg-emerald-500":pct>=80?"bg-blue-500":"bg-amber-500"}`} style={{width:`${Math.min(100,pct)}%`}}/></div></div>
+                              <p className="font-mono font-bold text-gray-700 text-xs flex-shrink-0">{fmt(br.salesM)} {t("ر.س","SAR")}</p>
+                              <button onClick={()=>{ setTransferFor({id:br.id,name:br.name}); setNewMgrUserId(br.mgrUserId ?? ""); }} title={t("نقل مدير الفرع","Transfer manager")} className="p-1.5 rounded-lg text-gray-400 hover:bg-purple-50 hover:text-purple-600 flex-shrink-0"><ArrowLeftRight size={13}/></button>
+                            </>)}
                           </div>
                         );
                       })}
@@ -1871,6 +1952,83 @@ function CABilling() {
   );
 }
 
+// T14.5 — SSO (SAML/OIDC) config. PUT /company/me/sso is gated on the live
+// subscription plan code (`enterprise`); a non-enterprise plan → 403 PLAN_REQUIRED
+// (details.plan = current code). We key the upgrade prompt off that error code.
+function CASsoCard({ t, dir }:{ t:(a:string,b:string)=>string; dir:string }) {
+  const { data: sso } = useSsoConfig();
+  const updateSsoMut = useUpdateSso();
+  const disableSsoMut = useDisableSso();
+  const [provider,setProvider]=useState<"oidc"|"saml">("oidc");
+  const [oidcIssuer,setOidcIssuer]=useState("");
+  const [oidcClientId,setOidcClientId]=useState("");
+  const [oidcClientSecret,setOidcClientSecret]=useState("");
+  const [metadataUrl,setMetadataUrl]=useState("");
+  const [entityId,setEntityId]=useState("");
+  const [defaultRole,setDefaultRole]=useState<"accountant"|"head"|"branch"|"procurement">("accountant");
+  const [planBlock,setPlanBlock]=useState<string|null>(null); // current plan code when PLAN_REQUIRED
+  useEffect(()=>{
+    if(!sso)return;
+    if(sso.provider) setProvider(sso.provider as "oidc"|"saml");
+    setOidcIssuer(sso.oidcIssuer ?? "");
+    setOidcClientId(sso.oidcClientId ?? "");
+    setMetadataUrl(sso.metadataUrl ?? "");
+    setEntityId(sso.entityId ?? "");
+    if(sso.defaultRole) setDefaultRole(sso.defaultRole as any);
+  },[sso]);
+  const save=()=>{
+    setPlanBlock(null);
+    const body:any = provider==="oidc"
+      ? { provider:"oidc", enabled:true, oidcIssuer, oidcClientId, oidcClientSecret: oidcClientSecret||undefined, defaultRole }
+      : { provider:"saml", enabled:true, metadataUrl: metadataUrl||undefined, entityId: entityId||undefined, defaultRole };
+    updateSsoMut.mutate(body, {
+      onError: (e)=>{ if(isApiError(e)&&e.code==="PLAN_REQUIRED"){ setPlanBlock(String((e.details as any)?.plan ?? "current")); } },
+    });
+  };
+  const inputCls="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400";
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6 space-y-4" dir={dir}>
+      <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+        <h3 className="font-bold text-gray-800 text-sm flex items-center gap-2"><Shield size={14} className="text-purple-600"/> {t("الدخول الموحّد (SSO)","Single Sign-On (SSO)")}</h3>
+        {sso?.enabled && <Badge className="bg-emerald-50 text-emerald-700 text-[10px]">{t("مُفعّل","Enabled")}</Badge>}
+      </div>
+      {planBlock ? (
+        <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 space-y-2">
+          <p className="text-sm font-bold text-amber-800">{t("متاح في خطة المؤسسات فقط","Available on the Enterprise plan only")}</p>
+          <p className="text-xs text-amber-700">{t("خطتك الحالية","Your current plan")}: <span className="font-mono">{planBlock}</span>. {t("رقِّ إلى المؤسسات لتفعيل الدخول الموحّد.","Upgrade to Enterprise to enable SSO.")}</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("المزوّد","Provider")}</label>
+              <select value={provider} onChange={e=>setProvider(e.target.value as "oidc"|"saml")} className={inputCls}><option value="oidc">OIDC</option><option value="saml">SAML</option></select>
+            </div>
+            <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الدور الافتراضي","Default Role")}</label>
+              <select value={defaultRole} onChange={e=>setDefaultRole(e.target.value as any)} className={inputCls}><option value="accountant">محاسب</option><option value="head">رئيس الحسابات</option><option value="branch">مدير فرع</option><option value="procurement">مدير مشتريات</option></select>
+            </div>
+          </div>
+          {provider==="oidc" ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">OIDC Issuer</label><input value={oidcIssuer} onChange={e=>setOidcIssuer(e.target.value)} dir="ltr" className={inputCls}/></div>
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">Client ID</label><input value={oidcClientId} onChange={e=>setOidcClientId(e.target.value)} dir="ltr" className={inputCls}/></div>
+              <div className="col-span-2"><label className="text-xs font-semibold text-gray-600 block mb-1">Client Secret</label><input value={oidcClientSecret} onChange={e=>setOidcClientSecret(e.target.value)} dir="ltr" placeholder={t("اتركه فارغاً للإبقاء على الحالي","leave blank to keep current")} className={inputCls}/></div>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">Metadata URL</label><input value={metadataUrl} onChange={e=>setMetadataUrl(e.target.value)} dir="ltr" className={inputCls}/></div>
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">Entity ID</label><input value={entityId} onChange={e=>setEntityId(e.target.value)} dir="ltr" className={inputCls}/></div>
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            {sso?.enabled && <Btn onClick={()=>disableSsoMut.mutate()} disabled={disableSsoMut.isPending}>{t("إيقاف","Disable")}</Btn>}
+            <Btn variant="primary" onClick={save} disabled={updateSsoMut.isPending}><Shield size={13}/> {t("حفظ SSO","Save SSO")}</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CASettings() {
   const { t, dir, lang, setLang } = useCLang();
   const { data: apiSettings } = useCompanySettings();
@@ -1948,6 +2106,9 @@ function CASettings() {
           </button>
         </div>
       </div>
+
+      {/* T14.5 — SSO config (Enterprise-gated). */}
+      <CASsoCard t={t} dir={dir}/>
 
       <ChangePasswordModal open={showPwd} onClose={()=>setShowPwd(false)}/>
       <TwoFactorSetupWizard open={show2FA} onClose={()=>setShow2FA(false)} t={t}/>
@@ -5451,6 +5612,88 @@ function AccCompanyCash() {
 
 // ACCOUNTANT — REPORTS
 // ═══════════════════════════════════════════════════
+// T15.3/T15.8 — custom report builder: pick dimensions/metrics → preview → save,
+// plus list + replay saved definitions. All hooks live in reportBuilder.ts.
+function CAReportBuilder() {
+  const { t } = useCLang();
+  const { data: fields } = useReportBuilderFields();
+  const previewMut = usePreviewBuilderReport();
+  const saveMut = useSaveBuilderReport();
+  const runMut = useRunSavedBuilderReport();
+  const { data: saved = [] } = useSavedBuilderReports();
+  const [open, setOpen] = useState(false);
+  const [dims, setDims] = useState<string[]>([]);
+  const [metrics, setMetrics] = useState<string[]>([]);
+  const [name, setName] = useState("");
+  const [preview, setPreview] = useState<any>(null);
+  const toggle = (arr:string[], set:(v:string[])=>void, k:string) => set(arr.includes(k) ? arr.filter(x=>x!==k) : [...arr, k]);
+  const definition = { dimensions: dims, metrics };
+  const runPreview = () => previewMut.mutate(definition, { onSuccess: (d)=>setPreview(d) });
+  const save = () => { if(!name.trim()) return; saveMut.mutate({ name: name.trim(), definition }, { onSuccess: ()=>setName("") }); };
+  // Columns follow the actual result keys (handles run-saved whose def differs from the current picks).
+  const cols = (preview?.rows?.[0] ? Object.keys(preview.rows[0]) : [...dims, ...metrics]);
+  if (!open) return (
+    <button onClick={()=>setOpen(true)} className="w-full py-2.5 rounded-xl border-2 border-dashed border-purple-300 text-purple-600 font-semibold text-sm hover:bg-purple-50 flex items-center justify-center gap-2"><BarChart3 size={14}/> {t("منشئ التقارير المخصّصة","Custom Report Builder")}</button>
+  );
+  return (
+    <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-4">
+      <div className="flex items-center justify-between"><h3 className="font-bold text-gray-800 text-sm flex items-center gap-2"><BarChart3 size={14} className="text-purple-600"/> {t("منشئ التقارير المخصّصة","Custom Report Builder")}</h3><button onClick={()=>setOpen(false)} className="text-gray-400 hover:text-gray-600"><X size={16}/></button></div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 mb-1.5">{t("الأبعاد","Dimensions")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {(fields?.dimensions ?? []).map(d=>(
+              <button key={d.key} onClick={()=>toggle(dims,setDims,d.key)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${dims.includes(d.key)?"bg-purple-600 text-white border-purple-600":"bg-white text-gray-600 border-gray-200"}`}>{d.labelAr||d.labelEn||d.key}</button>
+            ))}
+            {(fields?.dimensions ?? []).length===0 && <span className="text-[11px] text-gray-400">{t("لا أبعاد متاحة","No dimensions")}</span>}
+          </div>
+        </div>
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 mb-1.5">{t("المقاييس","Metrics")}</p>
+          <div className="flex flex-wrap gap-1.5">
+            {(fields?.metrics ?? []).map(m=>(
+              <button key={m.key} onClick={()=>toggle(metrics,setMetrics,m.key)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border ${metrics.includes(m.key)?"bg-blue-600 text-white border-blue-600":"bg-white text-gray-600 border-gray-200"}`}>{m.labelAr||m.labelEn||m.key}</button>
+            ))}
+            {(fields?.metrics ?? []).length===0 && <span className="text-[11px] text-gray-400">{t("لا مقاييس متاحة","No metrics")}</span>}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <Btn size="sm" variant="primary" onClick={runPreview} disabled={previewMut.isPending||dims.length+metrics.length===0}><Eye size={12}/> {t("معاينة","Preview")}</Btn>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder={t("اسم التقرير للحفظ","Report name to save")} className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-1.5 outline-none focus:border-purple-300"/>
+        <Btn size="sm" onClick={save} disabled={!name.trim()||dims.length+metrics.length===0||saveMut.isPending}><Check size={12}/> {t("حفظ","Save")}</Btn>
+      </div>
+      {preview && (
+        <div className="border border-gray-100 rounded-xl overflow-hidden overflow-x-auto">
+          <table className="w-full text-xs" dir="rtl">
+            <thead className="bg-gray-50"><tr>{cols.map(c=><th key={c} className="px-3 py-2 text-right text-gray-500 font-semibold">{c}</th>)}</tr></thead>
+            <tbody className="divide-y divide-gray-50">
+              {(preview.rows ?? []).slice(0,20).map((row:any,i:number)=>(
+                <tr key={i}>{cols.map(c=><td key={c} className="px-3 py-1.5 text-gray-700">{String(row[c] ?? "—")}</td>)}</tr>
+              ))}
+              {(preview.rows ?? []).length===0 && <tr><td colSpan={Math.max(1,cols.length)} className="px-3 py-4 text-center text-gray-400">{t("لا توجد نتائج","No results")}</td></tr>}
+            </tbody>
+          </table>
+          <div className="px-3 py-2 bg-gray-50/60 text-[11px] text-gray-500 flex justify-between"><span>{preview.rowCount ?? (preview.rows?.length ?? 0)} {t("صف","rows")}{preview.capped?` · ${t("مقتطعة","capped")}`:""}</span></div>
+        </div>
+      )}
+      {(saved as any[]).length>0 && (
+        <div>
+          <p className="text-[11px] font-semibold text-gray-500 mb-1.5">{t("تقارير محفوظة","Saved Reports")}</p>
+          <div className="space-y-1.5">
+            {(saved as any[]).map((s:any)=>(
+              <div key={s.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-gray-100 bg-gray-50/40">
+                <div className="flex-1 min-w-0"><p className="text-xs font-semibold text-gray-700 truncate">{s.name}</p>{s.descriptionAr&&<p className="text-[10px] text-gray-400 truncate">{s.descriptionAr}</p>}</div>
+                <Btn size="sm" onClick={()=>runMut.mutate(s.id, { onSuccess:(d)=>setPreview(d) })} disabled={runMut.isPending}><RefreshCw size={11}/> {t("تشغيل","Run")}</Btn>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AccCompanyReports() {
   const { t, dir } = useCLang();
   const { data: serverReports = [] } = useReports();
@@ -5475,6 +5718,7 @@ function AccCompanyReports() {
           </div>
         ))}
       </div>
+      <CAReportBuilder/>
     </div>
   );
 }

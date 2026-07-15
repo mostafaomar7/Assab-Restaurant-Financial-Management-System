@@ -31,6 +31,7 @@ import {
   queryKeys,
   type AdminAuditLogsFilter,
   type AdminBranchesFilter,
+  type AdminBranchRequestsFilter,
   type AdminBrandsFilter,
   type AdminCompaniesFilter,
   type AdminErpFilter,
@@ -447,6 +448,65 @@ export function useAdminBranches(filter: AdminBranchesFilter = {}) {
       const d = res.data as Page<AdminBranch> | AdminBranch[];
       return Array.isArray(d) ? d : (d.data ?? []);
     },
+  });
+}
+
+// ─── Branch-request review queue (T14.1) ─────────────────────────────────────
+// A company-admin's add-branch creates a pending_review branch; a platform admin
+// approves/rejects it here. Only pending_review ids match approve/reject (else 404).
+export function useAdminBranchRequests(filter: AdminBranchRequestsFilter = {}) {
+  return useQuery({
+    queryKey: queryKeys.platformAdminBranchRequests(filter),
+    queryFn: async () => {
+      const res = await api.get<Page<AdminBranch> | AdminBranch[]>(
+        "/admin/branch-requests",
+        { params: filter },
+      );
+      const d = res.data as Page<AdminBranch> | AdminBranch[];
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+    staleTime: 15_000,
+  });
+}
+
+const invalidateBranchRequests = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ["platform", "admin", "branch-requests"] });
+  qc.invalidateQueries({ queryKey: ["platform", "admin", "branches"] });
+};
+
+export function useApproveBranchRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post<AdminBranch>(
+        `/admin/branch-requests/${id}/approve`,
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      invalidateBranchRequests(qc);
+      toast.success("تم اعتماد الفرع");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+export function useRejectBranchRequest() {
+  const qc = useQueryClient();
+  return useMutation({
+    // reason is required (T14.1).
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const res = await api.post<AdminBranch>(
+        `/admin/branch-requests/${id}/reject`,
+        { reason },
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      invalidateBranchRequests(qc);
+      toast.success("تم رفض الفرع");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }
 
@@ -1091,11 +1151,14 @@ export function useAdminReportsCatalog() {
 
 export function useGenerateAdminReport() {
   return useMutation({
+    // T15.6 — scope by brand/restaurant/branch (resolved to branches server-side);
+    // format=pdf|xlsx streams a binary, json returns the report object.
     mutationFn: async (body: {
       reportKey: string;
-      period: { from: string; to: string };
+      period?: { from: string; to: string };
       brandIds?: string[];
       restaurantIds?: string[];
+      branchIds?: string[];
       format?: "json" | "pdf" | "xlsx";
     }) => {
       if (body.format === "pdf" || body.format === "xlsx") {
@@ -1114,10 +1177,26 @@ export function useGenerateAdminReport() {
   });
 }
 
-// ─── Report distribution (contract 1.7) ──────────────────────────────────────
+// ─── Report distribution (T15.3) ─────────────────────────────────────────────
+export interface AdminReportSendResult {
+  reportKey: string;
+  sentAt: string;
+  sentCount: number;
+  recipients: Array<{
+    restaurantId: string;
+    owner: string;
+    email: string;
+    sent: boolean;
+    sentDate?: string | null;
+  }>;
+}
+
 export function useSendAdminReport() {
   const qc = useQueryClient();
   return useMutation({
+    // T15.3 — email/in-app delivery to the brand owner. `restaurantIds` omitted
+    // → all active restaurants (bulk «إرسال الكل»). Prefer `method`; `channels`
+    // is a legacy alias. `format` default pdf. Idempotent per (key, restaurant, from).
     mutationFn: async ({
       reportKey,
       ...body
@@ -1125,17 +1204,34 @@ export function useSendAdminReport() {
       reportKey: string;
       period: { from: string; to: string };
       restaurantIds?: string[];
-      channels: Array<"email" | "inApp">;
+      method?: "email" | "inApp" | "both";
+      channels?: Array<"email" | "inApp">;
+      format?: "pdf" | "excel" | "both";
+      coverMessage?: string;
     }) => {
-      const res = await api.post(`/admin/reports/${reportKey}/send`, body);
+      const res = await api.post<AdminReportSendResult>(
+        `/admin/reports/${reportKey}/send`,
+        body,
+      );
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: queryKeys.platformAdminReportsCatalog });
-      toast.success("تم إرسال التقرير");
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "reports", "status"] });
+      toast.success(`تم إرسال التقرير${data?.sentCount != null ? ` (${data.sentCount})` : ""}`);
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
+}
+
+// T15.1 — parse dry-run result. status "verified" → wizard may advance to step ③;
+// "failed" → block, show errors[]. Extension guard is server-side (422).
+export interface AdminReportUploadResult {
+  uploadId: string;
+  reportKey: string;
+  status: "verified" | "failed";
+  rowCount: number;
+  errors: string[];
 }
 
 export function useUploadAdminReport() {
@@ -1143,12 +1239,21 @@ export function useUploadAdminReport() {
     mutationFn: async ({ reportKey, file }: { reportKey: string; file: File }) => {
       const fd = new FormData();
       fd.append("file", file);
-      const res = await api.post(`/admin/reports/${reportKey}/upload`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await api.post<AdminReportUploadResult>(
+        `/admin/reports/${reportKey}/upload`,
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
       return res.data;
     },
-    onSuccess: () => toast.success("تم رفع التقرير"),
+    // The dry-run may report `failed`; surface that instead of a blanket success.
+    onSuccess: (data) => {
+      if (data?.status === "failed") {
+        toast.error(data.errors?.[0] ?? "فشل التحقق من الملف");
+      } else {
+        toast.success(`تم التحقق من الملف${data?.rowCount != null ? ` (${data.rowCount} صف)` : ""}`);
+      }
+    },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }

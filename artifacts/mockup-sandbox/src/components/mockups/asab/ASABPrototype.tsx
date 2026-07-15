@@ -79,6 +79,15 @@ import {
   useCreateAdminRestaurant,
   useCreateAdminSubscription,
   useCreateAdminBranch,
+  useAdminBranchRequests,
+  useApproveBranchRequest,
+  useRejectBranchRequest,
+  useUploadAdminReport,
+  useSendAdminReport,
+  useAdminReportStatus,
+  useAdminReportPreview,
+  useAdminReportPeriods,
+  useGenerateAdminReport,
   useUpdateAdminRestaurant,
   useUpdateAdminPermissions,
   useExportAdminAuditLogs,
@@ -374,7 +383,7 @@ const EN_NAV_LABELS: Record<string, string> = {
   "head-reminders":"Reminders","head-accountants":"Accountant Performance",
   "head-erp":"ERP Export","head-reports":"Reports",
   "admin-overview":"Overview","admin-users":"Users",
-  "admin-restaurants":"Restaurants & Branches","admin-subscriptions":"Subscriptions",
+  "admin-restaurants":"Restaurants & Branches","admin-branch-requests":"Branch Requests","admin-subscriptions":"Subscriptions",
   "admin-packages":"Packages",
   "admin-companies":"Company Subscriptions","admin-permissions":"Permissions",
   "admin-reports":"Report Manager","admin-audit":"Activity Log",
@@ -613,6 +622,7 @@ const NAV_CONFIG: Record<RoleId, NavEntry[]> = {
     { section:"الإدارة" },
     { id:"admin-users",          label:"المستخدمون",        icon:<Users size={16}/>,           badge:3 },
     { id:"admin-restaurants",    label:"المطاعم والفروع",   icon:<Home size={16}/> },
+    { id:"admin-branch-requests",label:"طلبات الفروع",      icon:<Building2 size={16}/> },
     { id:"admin-subscriptions",  label:"الاشتراكات",        icon:<Shield size={16}/>,          badge:2, badgeColor:"yellow" as const },
     { id:"admin-packages",       label:"الباقات",           icon:<Package size={16}/> },
     { id:"admin-companies",      label:"اشتراكات الشركات",  icon:<Building2 size={16}/>,       badge:5, badgeColor:"yellow" as const },
@@ -1906,6 +1916,7 @@ function PageRouter({ state, pageProps, adminUsers, setAdminUsers }:{
     if(page==="admin-overview")      return <AdminOverview {...p}/>;
     if(page==="admin-users")         return <AdminUsers {...p} users={adminUsers} setUsers={setAdminUsers}/>;
     if(page==="admin-restaurants")   return <AdminRestaurants {...p}/>;
+    if(page==="admin-branch-requests") return <AdminBranchRequests {...p}/>;
     if(page==="admin-subscriptions") return <AdminSubscriptions {...p}/>;
     if(page==="admin-packages")      return <AdminPackages {...p}/>;
     if(page==="admin-companies")     return <AdminCompanies {...p}/>;
@@ -2609,6 +2620,8 @@ function OwnerReportsPage({ ops }: PageProps) {
   const { data: ownerApi } = useReportsOwnerPlatform();
   const dlReport = useDownloadHeadReport();
   const internalReports = (((internalReportsApi as any)?.data ?? internalReportsApi ?? []) as any[]);
+  // T15.18 — HEAD-7 financial-report cards, delivered under meta.financialReports.
+  const financialReports = (((internalReportsApi as any)?.meta?.financialReports ?? []) as any[]);
 
   // — Owner layer data source: ERP-posted only — the verified financial record
   const postedOps    = ops.filter(o=>o.erpPosted);
@@ -2711,6 +2724,24 @@ function OwnerReportsPage({ ops }: PageProps) {
             </div>
           </div>
           {/* B-H5: catalogue from GET /head/reports/internal; buttons wired to the row downloadUrl. */}
+          {/* T15.18 — HEAD-7 financial reports (endpoint catalog cards). */}
+          {financialReports.length>0 && (
+            <div className="mb-4">
+              <h3 className="font-bold text-gray-800 text-sm mb-3">{t("التقارير المالية","Financial Reports")}</h3>
+              <div className="grid grid-cols-2 gap-3">
+                {financialReports.map((f:any,i:number)=>(
+                  <div key={f.key ?? i} className="bg-white rounded-xl border border-gray-100 p-4 shadow-sm">
+                    <div className="flex items-center gap-2 mb-1"><BarChart3 size={15} className="text-purple-600"/><p className="font-bold text-gray-800 text-sm">{f.labelAr ?? f.key}</p></div>
+                    {f.note && <p className="text-[11px] text-gray-400 mb-2">{f.note}</p>}
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <Badge className="bg-gray-50 text-gray-500 text-[10px] font-mono">{f.method} {f.endpoint}</Badge>
+                      {(f.formats ?? []).map((fmt:string)=><Badge key={fmt} className="bg-purple-50 text-purple-700 text-[10px] uppercase">{fmt}</Badge>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {internalReports.length===0 ? (
             <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10 text-center text-gray-400 text-sm">
               {t("لا توجد تقارير داخلية متاحة بعد","No internal reports available yet")}
@@ -10904,6 +10935,63 @@ function AdminPackages({}: PageProps) {
   );
 }
 
+// T14.1 — platform-admin branch-creation review queue. A company-admin's
+// add-branch creates a pending_review branch; approve flips it live, reject
+// requires a reason. Only pending_review ids match approve/reject (else 404).
+function AdminBranchRequests({}: PageProps) {
+  const { t } = useLang();
+  const [tab,setTab] = useState<"pending_review"|"approved"|"rejected"|"all">("pending_review");
+  const { data: apiRows } = useAdminBranchRequests({ status: tab });
+  const approveMut = useApproveBranchRequest();
+  const rejectMut = useRejectBranchRequest();
+  const rows = (Array.isArray(apiRows) ? apiRows : []) as any[];
+  const [rejectFor,setRejectFor] = useState<{id:string;name:string}|null>(null);
+  const [reason,setReason] = useState("");
+  const submitReject = () => { if(!rejectFor||!reason.trim())return; rejectMut.mutate({ id:rejectFor.id, reason:reason.trim() }, { onSuccess:()=>{ setRejectFor(null); setReason(""); } }); };
+  const TABS = [["pending_review","قيد المراجعة","Pending"],["approved","معتمد","Approved"],["rejected","مرفوض","Rejected"],["all","الكل","All"]] as const;
+  const statusChip = (rs?:string)=> rs==="approved"?"bg-emerald-50 text-emerald-700":rs==="rejected"?"bg-red-50 text-red-700":"bg-amber-50 text-amber-700";
+  const statusLabel = (rs?:string)=> rs==="approved"?t("معتمد","Approved"):rs==="rejected"?t("مرفوض","Rejected"):t("قيد المراجعة","Pending review");
+  return (
+    <div className="space-y-5">
+      <div><h2 className="text-xl font-bold text-gray-800">{t("طلبات الفروع","Branch Requests")}</h2><p className="text-gray-400 text-sm mt-0.5">{t("مراجعة واعتماد الفروع التي أنشأها مديرو الشركات","Review and approve branches created by company admins")}</p></div>
+      <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1 w-fit">
+        {TABS.map(([k,ar,en])=>(
+          <button key={k} onClick={()=>setTab(k)} className={`px-4 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab===k?"bg-white text-gray-800 shadow-sm":"text-gray-500"}`}>{t(ar,en)}</button>
+        ))}
+      </div>
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        {rows.length===0 && <div className="px-5 py-10 text-center text-sm text-gray-400">{t("لا توجد طلبات","No requests")}</div>}
+        {rows.map((r,i)=>(
+          <div key={r.id ?? i} className="px-5 py-4 flex items-center gap-4 border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
+            <div className="w-9 h-9 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 flex-shrink-0"><Building2 size={16}/></div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap"><span className="font-semibold text-sm text-gray-800 truncate">{r.name}</span><Badge className={statusChip(r.reviewStatus)}>{statusLabel(r.reviewStatus)}</Badge></div>
+              <p className="text-[11px] text-gray-400 mt-0.5">{[r.companyName,r.brandName,r.restaurantName,r.city].filter(Boolean).join(" · ") || "—"}</p>
+              {r.reviewStatus==="rejected" && r.reviewNote && <p className="text-[11px] text-red-600 mt-0.5">{t("سبب الرفض:","Reason:")} {r.reviewNote}</p>}
+            </div>
+            {r.reviewStatus==="pending_review" && (
+              <div className="flex gap-1.5 flex-shrink-0">
+                <Btn size="sm" variant="success" disabled={approveMut.isPending} onClick={()=>approveMut.mutate(r.id)}><CheckCircle2 size={12}/> {t("اعتماد","Approve")}</Btn>
+                <Btn size="sm" variant="danger" onClick={()=>{ setRejectFor({id:r.id,name:r.name}); setReason(""); }}><XCircle size={12}/> {t("رفض","Reject")}</Btn>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {rejectFor && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setRejectFor(null)} dir="rtl">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-gray-800">{t("رفض الفرع","Reject Branch")} — {rejectFor.name}</h3><button onClick={()=>setRejectFor(null)} className="text-gray-400"><XCircle size={18}/></button></div>
+            <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("سبب الرفض (إلزامي)","Rejection reason (required)")}</label>
+            <textarea value={reason} onChange={e=>setReason(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 h-24 resize-none"/>
+            <div className="flex gap-2 justify-end pt-3"><Btn size="sm" onClick={()=>setRejectFor(null)}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="danger" onClick={submitReject} disabled={!reason.trim()||rejectMut.isPending}><XCircle size={12}/> {t("تأكيد الرفض","Confirm Reject")}</Btn></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminRestaurants({}: PageProps) {
   const { data: brandsApi } = useAdminBrands();
   useAdminRestaurantSubscriptions();
@@ -12144,6 +12232,7 @@ function AdminCompanies({ navigate }:PageProps) {
 function AdminReports({}: PageProps) {
   const { data: apiReportsCatalog } = useAdminReportsCatalog();
   const { data: brandsApiForReports } = useAdminBrands();
+  const { data: periodList = [] } = useAdminReportPeriods();
   const { t, lang, dir } = useLang(); const en = lang==="en";
   const rL = (r:{id:string;label:string}) => en ? (EN_NAV_LABELS[r.id]||r.label) : r.label;
   const rS = (r:{id:string;sub:string})   => en ? (EN_REPORT_SUBS[r.id]||r.sub)   : r.sub;
@@ -12154,8 +12243,28 @@ function AdminReports({}: PageProps) {
   const [sentReports,  setSentReports]  = useState<Set<string>>(new Set());
   const [statusFilter, setStatusFilter] = useState("pl");
   const [addRestModal, setAddRestModal] = useState(false);
+  // T15 — live hooks.
+  const uploadMut = useUploadAdminReport();
+  const sendMut = useSendAdminReport();
+  const generateMut = useGenerateAdminReport(); // T15.6 — backend-computed report → binary
+  const [uploadResult, setUploadResult] = useState<{ uploadId:string; status:"verified"|"failed"; rowCount:number; errors:string[] }|null>(null);
+  const [coverMessage, setCoverMessage] = useState("");
+  const [sendFormat, setSendFormat] = useState<"pdf"|"excel"|"both">("pdf");
+  const [sendMethod, setSendMethod] = useState<"email"|"inApp"|"both">("both");
 
-  const PERIOD = "أكتوبر 2025";
+  // Reporting period: prefer the API's newest YYYY-MM; fall back to the demo month.
+  const periodParam = (periodList as string[])[0] ?? "2025-10";
+  const [py, pm] = periodParam.split("-").map(Number);
+  const periodFrom = `${periodParam}-01`;
+  const periodTo = py && pm ? `${periodParam}-${String(new Date(py, pm, 0).getDate()).padStart(2,"0")}` : `${periodParam}-28`;
+  const AR_MONTHS = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+  const PERIOD = py && pm ? `${AR_MONTHS[pm-1]} ${py}` : "أكتوبر 2025";
+  // T15 §6 — generic flattened preview of the uploaded file (label/value/type/header).
+  // The structured P&L preview (T15.2) is deferred, so we render whatever cells the
+  // dry-run exposes and fall back to the demo layout only when no upload exists.
+  const { data: previewApi } = useAdminReportPreview(activeReport ?? "", uploadResult?.uploadId, periodParam);
+  // T15.5 (read side) — real per-restaurant sent/viewed status for the filtered report.
+  const { data: statusApi } = useAdminReportStatus(statusFilter, periodParam);
 
   const coreReports = [
     { id:"pl",           label:"قائمة الأرباح والخسائر",   sub:"تحليل مالي متعمق — 3 مستويات",       icon:"📈", tc:"text-purple-700", bc:"bg-purple-50", brd:"border-purple-200" },
@@ -12185,15 +12294,14 @@ function AdminReports({}: PageProps) {
       })))
     : []) as Array<{ id:string; name:string; owner:string; email:string }>;
 
-  // Send/view tracking starts empty — populated by sendReport(); no fake status.
-  const [repStatus, setRepStatus] = useState<Record<string,Record<string,{sent:boolean;sentDate:string;viewed:boolean;viewedDate:string}>>>({});
-  const getStatus = (repId:string, restId:string) => repStatus[repId]?.[restId] || {sent:false,sentDate:"",viewed:false,viewedDate:""};
 
+  // T15.3 — POST /admin/reports/{key}/send. Omitting restaurantIds → all active
+  // restaurants (bulk «إرسال الكل»). Delivery goes to the brand owner.
   const sendReport = (repId:string) => {
-    const now = "14 أكتوبر 2025";
-    setRepStatus(p=>({ ...p, [repId]:Object.fromEntries(RESTAURANTS.map(r=>[r.id,{sent:true,sentDate:now,viewed:false,viewedDate:""}])) }));
-    setSentReports(p=>{ const s=new Set(p); s.add(repId); return s; });
-    setStep(3);
+    sendMut.mutate(
+      { reportKey: repId, period: { from: periodFrom, to: periodTo }, method: sendMethod, format: sendFormat, coverMessage: coverMessage || undefined },
+      { onSuccess: () => { setSentReports(p=>{ const s=new Set(p); s.add(repId); return s; }); setStep(3); } },
+    );
   };
 
   const previewRows: Record<string,{label:string;value:string;type:string;header?:boolean}[]> = {
@@ -12252,19 +12360,30 @@ function AdminReports({}: PageProps) {
 
           {step===1 && <div className="space-y-4">
             {!uploaded
-              ? <div onClick={()=>setUploaded(true)} className="border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50/20 transition-all">
+              ? <label className="block border-2 border-dashed border-gray-300 rounded-2xl p-12 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50/20 transition-all">
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={uploadMut.isPending}
+                    onChange={(e)=>{ const f=e.target.files?.[0]; if(!f||!activeReport)return; uploadMut.mutate({ reportKey: activeReport, file: f }, { onSuccess:(d:any)=>{ setUploadResult(d); setUploaded(true); } }); }}/>
                   <div className="text-5xl mb-3">📊</div>
-                  <p className="font-semibold text-gray-700 mb-1">{t("اسحب وأفلت ملف Excel هنا","Drag & drop Excel file here")}</p>
+                  <p className="font-semibold text-gray-700 mb-1">{uploadMut.isPending?t("جارٍ التحقق من الملف…","Verifying file…"):t("اسحب وأفلت ملف Excel هنا","Drag & drop Excel file here")}</p>
                   <p className="text-xs text-gray-400 mb-4">xlsx, xls, csv · {PERIOD}</p>
-                  <Btn variant="primary" className="mx-auto"><Upload size={14}/> {t("اختيار الملف","Choose File")}</Btn>
-                </div>
+                  <span className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-purple-600 text-white text-sm font-bold"><Upload size={14}/> {t("اختيار الملف","Choose File")}</span>
+                </label>
               : <div className="space-y-3">
-                  <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
-                    <CheckCircle2 size={18} className="text-emerald-600 flex-shrink-0"/>
-                    <div><p className="font-semibold text-sm text-emerald-800">{t("تم رفع الملف بنجاح","File uploaded successfully")}</p><p className="text-xs text-emerald-600">{rL(selectedReport)}_{PERIOD.replace(" ","_")}.xlsx ✓</p></div>
-                    <button onClick={()=>setUploaded(false)} className="mr-auto text-emerald-400 hover:text-emerald-600"><X size={14}/></button>
-                  </div>
-                  <Btn variant="primary" onClick={()=>setStep(2)} className="w-full justify-center">{t("معاينة التقرير →","Preview Report →")}</Btn>
+                  {/* T15.1 — parse dry-run: verified → allow preview; failed → block + show errors. */}
+                  {uploadResult?.status === "failed" ? (
+                    <div className="p-3 bg-red-50 border border-red-200 rounded-xl space-y-1.5">
+                      <div className="flex items-center gap-3"><XCircle size={18} className="text-red-600 flex-shrink-0"/><p className="font-semibold text-sm text-red-800">{t("فشل التحقق من الملف","File verification failed")}</p><button onClick={()=>{ setUploaded(false); setUploadResult(null); }} className="mr-auto text-red-400 hover:text-red-600"><X size={14}/></button></div>
+                      {(uploadResult.errors ?? []).map((er,ei)=><p key={ei} className="text-xs text-red-600 pr-7">• {er}</p>)}
+                      <p className="text-[11px] text-red-500 pr-7">{t("صحّح الملف وأعد الرفع للمتابعة.","Fix the file and re-upload to continue.")}</p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3 p-3 bg-emerald-50 border border-emerald-200 rounded-xl">
+                      <CheckCircle2 size={18} className="text-emerald-600 flex-shrink-0"/>
+                      <div><p className="font-semibold text-sm text-emerald-800">{t("تم التحقق","Verified")} ✓</p><p className="text-xs text-emerald-600">{uploadResult?.rowCount!=null?`${uploadResult.rowCount} ${t("صف","rows")}`:rL(selectedReport)}</p></div>
+                      <button onClick={()=>{ setUploaded(false); setUploadResult(null); }} className="mr-auto text-emerald-400 hover:text-emerald-600"><X size={14}/></button>
+                    </div>
+                  )}
+                  <Btn variant="primary" onClick={()=>setStep(2)} disabled={uploadResult?.status==="failed"} className="w-full justify-center">{t("معاينة التقرير →","Preview Report →")}</Btn>
                 </div>}
           </div>}
 
@@ -12279,7 +12398,7 @@ function AdminReports({}: PageProps) {
                 <p className="text-purple-200 text-xs mt-0.5">{t("جميع المطاعم المشتركة","All subscribed restaurants")} · {RESTAURANTS.length} {t("مطاعم","restaurants")}</p>
               </div>
               <table className="w-full" dir="rtl"><tbody className="divide-y divide-gray-200">
-                {(previewRows[activeReport]||previewRows["pl"]).map((row,i)=>(
+                {(((previewApi?.rows && previewApi.rows.length>0) ? previewApi.rows : (previewRows[activeReport]||previewRows["pl"])) as any[]).map((row,i)=>(
                   <tr key={i} className={row.header?"bg-gray-100":"bg-white"}>
                     <td className={`px-5 py-2.5 text-sm ${row.header?"font-bold text-gray-800":"text-gray-600"}`}>{row.label}</td>
                     <td className={`px-5 py-2.5 text-left font-mono text-sm ${row.type==="profit"?"text-emerald-700 font-bold":row.type==="expense"?"text-red-600":"text-gray-800"}`} dir="ltr">{row.value}</td>
@@ -12297,21 +12416,37 @@ function AdminReports({}: PageProps) {
             </div>
             <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-center gap-2 text-amber-700 text-sm">
               <Bell size={14} className="flex-shrink-0"/>
-              {t("سيُرسَل تقرير","Report")} <strong>{rL(selectedReport)} — {PERIOD}</strong> {t("لجميع أصحاب المطاعم بالبريد الإلكتروني + إشعار داخل التطبيق.","will be sent to all restaurant owners via email + in-app notification.")}
+              {t("سيُرسَل تقرير","Report")} <strong>{rL(selectedReport)} — {PERIOD}</strong> {t("لمالك كل علامة (بريد + إشعار داخل التطبيق حسب اختيارك).","will be sent to each brand owner (email + in-app per your choice).")}
             </div>
-            <div className="space-y-1.5 max-h-60 overflow-y-auto">
+            {/* T15.3 — delivery method, attachment format, and optional cover message. */}
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("طريقة الإرسال","Delivery Method")}</label>
+                <select value={sendMethod} onChange={e=>setSendMethod(e.target.value as any)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none bg-white">
+                  <option value="both">{t("بريد + إشعار","Email + In-app")}</option><option value="email">{t("بريد فقط","Email only")}</option><option value="inApp">{t("إشعار فقط","In-app only")}</option>
+                </select>
+              </div>
+              <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("صيغة المرفق","Attachment Format")}</label>
+                <select value={sendFormat} onChange={e=>setSendFormat(e.target.value as any)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none bg-white">
+                  <option value="pdf">PDF</option><option value="excel">Excel</option><option value="both">{t("كلاهما","Both")}</option>
+                </select>
+              </div>
+            </div>
+            <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("رسالة الغلاف (اختياري)","Cover message (optional)")}</label>
+              <textarea value={coverMessage} maxLength={2000} onChange={e=>setCoverMessage(e.target.value)} placeholder={t("تفضلوا التقرير الشهري…","Please find the monthly report…")} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 h-20 resize-none"/>
+            </div>
+            <div className="space-y-1.5 max-h-52 overflow-y-auto">
               {RESTAURANTS.map((r)=>(
                 <div key={r.id} className="flex items-center gap-3 p-3 rounded-xl border border-gray-100 bg-white">
                   <CheckCircle2 size={16} className="text-emerald-500 flex-shrink-0"/>
                   <div className="flex-1"><p className="text-sm font-medium text-gray-700">{r.name}</p><p className="text-xs text-gray-400">{r.owner} · {r.email}</p></div>
-                  <span className="text-xs text-gray-400">{t("إيميل + إشعار","Email + Notification")}</span>
+                  <span className="text-xs text-gray-400">{t("مالك العلامة","Brand owner")}</span>
                 </div>
               ))}
             </div>
             <div className="flex gap-3">
               <Btn onClick={()=>setStep(2)}>{t("← رجوع","← Back")}</Btn>
-              <button onClick={()=>sendReport(activeReport)} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white font-semibold text-sm hover:bg-purple-700 flex items-center justify-center gap-2">
-                <Upload size={15}/> {t("إرسال التقرير لجميع المطاعم","Send Report to All Restaurants")}
+              <button onClick={()=>sendReport(activeReport)} disabled={sendMut.isPending} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white font-semibold text-sm hover:bg-purple-700 disabled:opacity-60 flex items-center justify-center gap-2">
+                <Upload size={15}/> {sendMut.isPending?t("جارٍ الإرسال…","Sending…"):t("إرسال التقرير لكل المطاعم","Send Report to All Restaurants")}
               </button>
             </div>
           </div>}
@@ -12375,23 +12510,19 @@ function AdminReports({}: PageProps) {
             <div className="space-y-2">
               {coreReports.map(rep=>{
                 const isSent = sentReports.has(rep.id);
-                const statusData = repStatus[rep.id];
-                const sentCount = statusData ? Object.values(statusData).filter(s=>s.sent).length : 0;
-                const viewedCount = statusData ? Object.values(statusData).filter(s=>s.viewed).length : 0;
                 return (
                   <div key={rep.id} className={`bg-white rounded-xl border shadow-sm p-4 flex items-center gap-4 hover:shadow transition-shadow cursor-pointer ${isSent?"border-emerald-100":"border-gray-100"}`}
-                    onClick={()=>{ setActiveReport(rep.id); setStep(0); setUploaded(false); }}>
+                    onClick={()=>{ setActiveReport(rep.id); setStep(0); setUploaded(false); setUploadResult(null); }}>
                     <div className={`w-11 h-11 rounded-xl ${rep.bc} border ${rep.brd} flex items-center justify-center text-xl flex-shrink-0`}>{rep.icon}</div>
                     <div className="flex-1 min-w-0">
                       <p className={`font-bold text-sm ${rep.tc}`}>{rL(rep)}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{rS(rep)}</p>
                     </div>
+                    {/* T15.6 — generate a backend-computed report as a binary (no wizard). */}
+                    <button onClick={(e)=>{ e.stopPropagation(); generateMut.mutate({ reportKey: rep.id, period:{from:periodFrom,to:periodTo}, format:"pdf" }); }} disabled={generateMut.isPending} title="PDF" className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 flex-shrink-0"><Download size={13}/></button>
+                    <button onClick={(e)=>{ e.stopPropagation(); generateMut.mutate({ reportKey: rep.id, period:{from:periodFrom,to:periodTo}, format:"xlsx" }); }} disabled={generateMut.isPending} title="Excel" className="p-1.5 rounded-lg text-gray-400 hover:bg-emerald-50 hover:text-emerald-600 flex-shrink-0"><FileText size={13}/></button>
                     {isSent
-                      ? <div className="flex items-center gap-3 flex-shrink-0">
-                          <div className="text-center"><p className="text-sm font-bold text-emerald-700">{sentCount}/{RESTAURANTS.length}</p><p className="text-[10px] text-gray-400">{t("أُرسل","Sent")}</p></div>
-                          <div className="text-center"><p className="text-sm font-bold text-blue-700">{viewedCount}/{RESTAURANTS.length}</p><p className="text-[10px] text-gray-400">{t("اطّلع","Viewed")}</p></div>
-                          <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">✓ {t("مُرسَل","Sent")}</Badge>
-                        </div>
+                      ? <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 flex-shrink-0">✓ {t("مُرسَل","Sent")}</Badge>
                       : <Badge className="bg-amber-50 text-amber-700 border border-amber-200 flex-shrink-0">⏳ {t("لم يُرسَل","Not Sent")}</Badge>
                     }
                     <ChevronDown size={14} className="text-gray-400 rotate-[-90deg] flex-shrink-0"/>
@@ -12410,23 +12541,19 @@ function AdminReports({}: PageProps) {
             <div className="space-y-2">
               {specializedReports.map(rep=>{
                 const isSent = sentReports.has(rep.id);
-                const statusData = repStatus[rep.id];
-                const sentCount = statusData ? Object.values(statusData).filter(s=>s.sent).length : 0;
-                const viewedCount = statusData ? Object.values(statusData).filter(s=>s.viewed).length : 0;
                 return (
                   <div key={rep.id} className={`bg-white rounded-xl border shadow-sm p-4 flex items-center gap-4 hover:shadow transition-shadow cursor-pointer ${isSent?"border-emerald-100":"border-gray-100"}`}
-                    onClick={()=>{ setActiveReport(rep.id); setStep(0); setUploaded(false); }}>
+                    onClick={()=>{ setActiveReport(rep.id); setStep(0); setUploaded(false); setUploadResult(null); }}>
                     <div className={`w-11 h-11 rounded-xl ${rep.bc} border ${rep.brd} flex items-center justify-center text-xl flex-shrink-0`}>{rep.icon}</div>
                     <div className="flex-1 min-w-0">
                       <p className={`font-bold text-sm ${rep.tc}`}>{rL(rep)}</p>
                       <p className="text-xs text-gray-400 mt-0.5">{rS(rep)}</p>
                     </div>
+                    {/* T15.6 — generate a backend-computed report as a binary (no wizard). */}
+                    <button onClick={(e)=>{ e.stopPropagation(); generateMut.mutate({ reportKey: rep.id, period:{from:periodFrom,to:periodTo}, format:"pdf" }); }} disabled={generateMut.isPending} title="PDF" className="p-1.5 rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 flex-shrink-0"><Download size={13}/></button>
+                    <button onClick={(e)=>{ e.stopPropagation(); generateMut.mutate({ reportKey: rep.id, period:{from:periodFrom,to:periodTo}, format:"xlsx" }); }} disabled={generateMut.isPending} title="Excel" className="p-1.5 rounded-lg text-gray-400 hover:bg-emerald-50 hover:text-emerald-600 flex-shrink-0"><FileText size={13}/></button>
                     {isSent
-                      ? <div className="flex items-center gap-3 flex-shrink-0">
-                          <div className="text-center"><p className="text-sm font-bold text-emerald-700">{sentCount}/{RESTAURANTS.length}</p><p className="text-[10px] text-gray-400">{t("أُرسل","Sent")}</p></div>
-                          <div className="text-center"><p className="text-sm font-bold text-blue-700">{viewedCount}/{RESTAURANTS.length}</p><p className="text-[10px] text-gray-400">{t("اطّلع","Viewed")}</p></div>
-                          <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200">✓ {t("مُرسَل","Sent")}</Badge>
-                        </div>
+                      ? <Badge className="bg-emerald-50 text-emerald-700 border border-emerald-200 flex-shrink-0">✓ {t("مُرسَل","Sent")}</Badge>
                       : <Badge className="bg-amber-50 text-amber-700 border border-amber-200 flex-shrink-0">⏳ {t("لم يُرسَل","Not Sent")}</Badge>
                     }
                     <ChevronDown size={14} className="text-gray-400 rotate-[-90deg] flex-shrink-0"/>
@@ -12453,11 +12580,11 @@ function AdminReports({}: PageProps) {
 
           {/* Status summary cards */}
           {(() => {
-            const repData = repStatus[statusFilter] || {};
-            const sent    = RESTAURANTS.filter(r=>repData[r.id]?.sent).length;
-            const notSent = RESTAURANTS.length - sent;
-            const viewed  = RESTAURANTS.filter(r=>repData[r.id]?.viewed).length;
-            const notView = sent - viewed;
+            const statusRows = (statusApi?.rows ?? []) as any[];
+            const sent    = statusApi?.summary?.sent    ?? statusRows.filter(r=>r.sent).length;
+            const notSent = statusApi?.summary?.notSent  ?? Math.max(0, RESTAURANTS.length - sent);
+            const viewed  = statusApi?.summary?.viewed   ?? statusRows.filter(r=>r.viewed).length;
+            const notView = statusApi?.summary?.notViewed ?? Math.max(0, sent - viewed);
             const selRep  = allReports.find(r=>r.id===statusFilter)!;
             return (
               <>
@@ -12486,18 +12613,17 @@ function AdminReports({}: PageProps) {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                      {RESTAURANTS.map(rest=>{
-                        const st = repData[rest.id] || {sent:false,sentDate:"",viewed:false,viewedDate:""};
-                        return (
-                          <tr key={rest.id} className="hover:bg-gray-50/50">
-                            <td className="px-4 py-3 font-semibold text-sm text-gray-800">{rest.name}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500">{rest.owner}</td>
+                      {statusRows.length===0 && <tr><td colSpan={6} className="px-4 py-8 text-center text-sm text-gray-400">{t("لم يُرسَل هذا التقرير بعد","This report has not been sent yet")}</td></tr>}
+                      {statusRows.map((st:any)=>(
+                          <tr key={st.restaurantId} className="hover:bg-gray-50/50">
+                            <td className="px-4 py-3 font-semibold text-sm text-gray-800">{st.restaurantName}</td>
+                            <td className="px-4 py-3 text-xs text-gray-500">{st.owner}</td>
                             <td className="px-4 py-3 text-center">
                               {st.sent
                                 ? <span className="inline-flex items-center gap-1 text-emerald-700 font-semibold text-xs"><CheckCircle2 size={13}/> {t("نعم","Yes")}</span>
                                 : <span className="inline-flex items-center gap-1 text-red-500 text-xs"><X size={13}/> {t("لا","No")}</span>}
                             </td>
-                            <td className="px-4 py-3 text-center text-xs text-gray-500">{st.sentDate||"—"}</td>
+                            <td className="px-4 py-3 text-center text-xs text-gray-500">{st.sentDate ? String(st.sentDate).slice(0,10) : "—"}</td>
                             <td className="px-4 py-3 text-center">
                               {st.viewed
                                 ? <span className="inline-flex items-center gap-1 text-blue-700 font-semibold text-xs"><Eye size={13}/> {t("نعم","Yes")}</span>
@@ -12505,10 +12631,9 @@ function AdminReports({}: PageProps) {
                                   ? <span className="text-amber-600 text-xs font-medium">⏳ {t("لم يطّلع","Not Viewed")}</span>
                                   : <span className="text-gray-300 text-xs">—</span>}
                             </td>
-                            <td className="px-4 py-3 text-center text-xs text-gray-500">{st.viewedDate||"—"}</td>
+                            <td className="px-4 py-3 text-center text-xs text-gray-500">{st.viewedDate ? String(st.viewedDate).slice(0,10) : "—"}</td>
                           </tr>
-                        );
-                      })}
+                      ))}
                     </tbody>
                   </table>
                 </div>

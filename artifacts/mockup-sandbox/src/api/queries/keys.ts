@@ -180,6 +180,8 @@ export const queryKeys = {
   platformAdminRestaurantSubs: ["platform", "admin", "restaurants", "subscriptions"] as const,
   platformAdminBranches: (filter?: AdminBranchesFilter) =>
     ["platform", "admin", "branches", { filter }] as const,
+  platformAdminBranchRequests: (filter?: AdminBranchRequestsFilter) =>
+    ["platform", "admin", "branch-requests", { filter }] as const,
   platformAdminUsers: (filter?: AdminUsersFilter) =>
     ["platform", "admin", "users", { filter }] as const,
   platformAdminDistribution: ["platform", "admin", "distribution"] as const,
@@ -458,6 +460,13 @@ export interface AdminBranchesFilter {
   restaurantId?: string;
   city?: string;
   search?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+// T14.1 — platform-admin branch-creation review queue.
+export interface AdminBranchRequestsFilter {
+  status?: "pending_review" | "approved" | "rejected" | "all";
   page?: number;
   pageSize?: number;
 }

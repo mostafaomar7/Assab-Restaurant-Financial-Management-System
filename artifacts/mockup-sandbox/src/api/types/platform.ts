@@ -101,6 +101,14 @@ export interface AdminBranch {
   city?: string;
   address?: string;
   phone?: string;
+  // T14.1 — branch-request review workflow (also returned by the admin queue).
+  status?: string;
+  reviewStatus?: "pending_review" | "approved" | "rejected";
+  reviewNote?: string;
+  companyName?: string;
+  brandName?: string;
+  restaurantName?: string;
+  createdAt?: string;
 }
 
 export interface AdminRestaurantSubscription {

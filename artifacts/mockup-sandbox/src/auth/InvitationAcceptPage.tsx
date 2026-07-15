@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useMutation } from "@tanstack/react-query";
 import { api } from "../api/client";
-import { getErrorMessage } from "../api/errors";
+import { getErrorMessage, isApiError } from "../api/errors";
 import { setTokens } from "../api/tokens";
 import type { LoginResponse } from "../api/types";
 
@@ -57,7 +57,17 @@ export function InvitationAcceptPage({ onDone }: Props) {
       // Trigger reload so the bootstrap effect in AuthProvider runs with new tokens.
       window.location.reload();
     },
-    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+    // T14.3 — a fresh email creates the account; an email already belonging to
+    // another company is rejected 409 EMAIL_IN_OTHER_COMPANY (nothing mutated).
+    onError: (e) => {
+      if (isApiError(e) && e.code === "EMAIL_IN_OTHER_COMPANY") {
+        toast.error(
+          "هذا البريد مسجَّل بالفعل في شركة أخرى — تعذّر قبول الدعوة به.",
+        );
+        return;
+      }
+      toast.error(getErrorMessage(e, "ar"));
+    },
   });
 
   function handleSubmit(e: FormEvent) {

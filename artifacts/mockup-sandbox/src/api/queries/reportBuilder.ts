@@ -1,6 +1,7 @@
 import {
   useMutation,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api } from "../client";
@@ -74,6 +75,7 @@ export function usePreviewBuilderReport() {
 }
 
 export function useSaveBuilderReport() {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: {
       name: string;
@@ -86,7 +88,48 @@ export function useSaveBuilderReport() {
       );
       return res.data;
     },
-    onSuccess: () => toast.success("تم حفظ التقرير المخصص"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["reports", "builder", "saved"] });
+      toast.success("تم حفظ التقرير المخصص");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// T15.8 — a saved builder definition (listable + replayable).
+export interface SavedBuilderReport {
+  id: string;
+  name: string;
+  descriptionAr?: string;
+  definition: BuilderQuery;
+  createdAt: string;
+}
+
+// T15.8 — GET /reports/builder/saved (paginated tenant list).
+export function useSavedBuilderReports() {
+  return useQuery({
+    queryKey: ["reports", "builder", "saved"] as const,
+    queryFn: async () => {
+      const res = await api.get<
+        { data: SavedBuilderReport[] } | SavedBuilderReport[]
+      >("/reports/builder/saved");
+      const d = res.data as { data?: SavedBuilderReport[] } | SavedBuilderReport[];
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+    staleTime: 60_000,
+  });
+}
+
+// T15.8 — POST /reports/builder/{id}/run replays a saved definition through
+// preview (same shape). Foreign-tenant id → 404.
+export function useRunSavedBuilderReport() {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post<BuilderPreviewResponse>(
+        `/reports/builder/${id}/run`,
+      );
+      return res.data;
+    },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
 }

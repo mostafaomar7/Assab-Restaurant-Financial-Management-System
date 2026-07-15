@@ -37,11 +37,26 @@ export type ReportKey =
   | "breakeven"
   | "cash-flow";
 
+// T15.1/T15.7 — typed report request. All fields optional; role-gated to
+// accountant/head/company-admin server-side (branch/procurement/supplier → 403).
+export interface TypedReportBody {
+  from?: string;
+  to?: string;
+  branchIds?: string[];
+}
+
+export interface TypedReportResult {
+  reportId: string;
+  generatedAt: string;
+  data: Record<string, unknown>;
+  downloadUrl: string | null;
+}
+
 function makeReportGenerator(key: ReportKey) {
   return function useGenerate() {
     return useMutation({
-      mutationFn: async (body: Record<string, unknown> = {}) => {
-        const res = await api.post<unknown>(`/reports/${key}`, body);
+      mutationFn: async (body: TypedReportBody = {}) => {
+        const res = await api.post<TypedReportResult>(`/reports/${key}`, body);
         return res.data;
       },
       onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -76,6 +91,20 @@ export function useDownloadReport() {
         filename ?? `${key}.${format}`,
         { format },
       );
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// T15.5 — mark a distributed report as viewed (read receipt). Any company role;
+// foreign-tenant id → 404. Response { id, viewed:true, viewedAt }.
+export function useMarkReportDistributionViewed() {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post<{ id: string; viewed: boolean; viewedAt?: string }>(
+        `/company/me/reports/distributions/${id}/viewed`,
+      );
+      return res.data;
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

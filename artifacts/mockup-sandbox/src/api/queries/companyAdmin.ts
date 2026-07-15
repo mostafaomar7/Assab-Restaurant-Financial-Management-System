@@ -23,6 +23,11 @@ export interface CompanyAdminDashboard {
     monthlyTargetHalalas: number;
   }>;
   totals?: Record<string, number>;
+  // T14.4 — real storage quota (summed from namespaced attachment bytes).
+  quotas?: {
+    storage?: { usedGb: number; maxGb: number | null };
+    [k: string]: { usedGb?: number; maxGb?: number | null } | undefined;
+  };
 }
 
 export interface Plan {
@@ -96,6 +101,12 @@ export interface Branch {
   managerName?: string;
   monthlySalesHalalas?: number;
   monthlyTargetHalalas?: number;
+  // T14.1 — add-branch is now pending platform review; the branch stays
+  // inactive (status !== "active") until a platform admin approves it.
+  status?: string;
+  reviewStatus?: "pending_review" | "approved" | "rejected";
+  reviewNote?: string;
+  messageAr?: string;
 }
 
 export interface CompanyModule {
@@ -412,6 +423,25 @@ export function useCreateCompanyInvitation() {
   });
 }
 
+// T14.2 — resend a pending invitation: regenerates the token, extends expiry
+// +7d, re-queues the email. 202 { resent, expiresAt }. Non-pending → 409.
+export function useResendCompanyInvitation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await api.post<{ resent: boolean; expiresAt?: string }>(
+        `/company/invitations/${id}/resend`,
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: queryKeys.companyInvitations });
+      toast.success("تم إعادة إرسال الدعوة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
 export function useRevokeCompanyInvitation() {
   const qc = useQueryClient();
   return useMutation({
@@ -549,9 +579,11 @@ export function useCreateBranch() {
       const res = await api.post<Branch>("/company/me/branches", body);
       return res.data;
     },
-    onSuccess: () => {
+    // T14.1 — the branch is created pending_review, not live. Surface the
+    // server's messageAr («سيظهر بعد مراجعة الإدارة») rather than "added".
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: queryKeys.companyBrands });
-      toast.success("تم إضافة الفرع");
+      toast.success(data?.messageAr ?? "تم إرسال طلب الفرع للمراجعة");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

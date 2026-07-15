@@ -193,11 +193,29 @@ export function useErpBatchesPlatform(filter: PlatformErpFilter = {}) {
 }
 
 // ─── Reports ────────────────────────────────────────────────────────────────
+// T15.18 — HEAD-7 financial-report cards, delivered under meta.financialReports.
+export interface HeadFinancialReportCard {
+  key: string;
+  labelAr: string;
+  reportKey: string;
+  method: string;
+  endpoint: string;
+  formats: string[];
+  note?: string;
+}
+
+export interface HeadReportsInternalResponse {
+  data: unknown[];
+  meta?: { financialReports?: HeadFinancialReportCard[] };
+}
+
 export function useReportsInternalPlatform() {
   return useQuery({
     queryKey: queryKeys.platformReportsInternal,
     queryFn: async () => {
-      const res = await api.get<unknown>("/head/reports/internal");
+      const res = await api.get<HeadReportsInternalResponse>(
+        "/head/reports/internal",
+      );
       return res.data;
     },
   });
