@@ -4,9 +4,12 @@ import { useAuth } from "./AuthContext";
 import { getErrorMessage } from "../api/errors";
 import { isTwoFactorChallenge } from "../api/auth";
 import { ForgotPasswordPage } from "./ForgotPasswordPage";
+import { V, G, FONT } from "./authTheme";
+import { useSiteLang } from "./siteLang";
 
 export function LoginPage() {
   const { login, loginWith2fa, loggingIn } = useAuth();
+  const [lang, , t] = useSiteLang();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -22,86 +25,79 @@ export function LoginPage() {
     // Step 2 of 2FA — submit the OTP against the step-up token.
     if (twoFactorToken) {
       if (!otpCode) {
-        toast.error("من فضلك أدخل رمز التحقق");
+        toast.error(t("من فضلك أدخل رمز التحقق", "Please enter the verification code"));
         return;
       }
       try {
         await loginWith2fa(twoFactorToken, otpCode);
-        toast.success("تم تسجيل الدخول بنجاح");
+        toast.success(t("تم تسجيل الدخول بنجاح", "Signed in successfully"));
       } catch (err) {
-        toast.error(getErrorMessage(err, "ar"));
+        toast.error(getErrorMessage(err, lang));
       }
       return;
     }
     if (!email || !password) {
-      toast.error("من فضلك أدخل البريد وكلمة المرور");
+      toast.error(t("من فضلك أدخل البريد وكلمة المرور", "Please enter your email and password"));
       return;
     }
     try {
       const res = await login(email, password);
       if (isTwoFactorChallenge(res)) {
-        // Backend wants a second factor — show the OTP input.
         setTwoFactorToken(res.twoFactorToken);
-        toast("أدخل رمز التحقق الثنائي");
+        toast(t("أدخل رمز التحقق الثنائي", "Enter your two-factor code"));
         return;
       }
-      toast.success("تم تسجيل الدخول بنجاح");
+      toast.success(t("تم تسجيل الدخول بنجاح", "Signed in successfully"));
     } catch (err) {
-      toast.error(getErrorMessage(err, "ar"));
+      toast.error(getErrorMessage(err, lang));
     }
   }
-
-  // ─── Electric Violet + GreyScale tokens (matches the entry brand panel) ──────
-  const V600 = "#7C3AED", V700 = "#6D28D9", V800 = "#5B21B6";
-  const G200 = "#E4E7EC", G300 = "#D0D5DD", G400 = "#98A2B3", G500 = "#667085",
-    G600 = "#475467", G700 = "#344054", G900 = "#101828";
-  const FONT = "'IBM Plex Sans Arabic', 'Segoe UI', system-ui, sans-serif";
 
   const inputBase = {
     width: "100%",
     padding: "12px 14px",
     borderRadius: 12,
     background: "#fff",
-    border: `1.5px solid ${G300}`,
-    color: G900,
+    border: `1.5px solid ${G[300]}`,
+    color: G[900],
     fontSize: 14,
     outline: "none",
     direction: "ltr" as const,
-    textAlign: "right" as const,
+    textAlign: (lang === "ar" ? "right" : "left") as "right" | "left",
     fontFamily: "inherit",
     transition: "border-color .15s ease, box-shadow .15s ease",
   };
   const focusOn = (e: { currentTarget: HTMLInputElement }) => {
-    e.currentTarget.style.borderColor = V600;
-    e.currentTarget.style.boxShadow = `0 0 0 4px ${V600}1f`;
+    e.currentTarget.style.borderColor = V[600];
+    e.currentTarget.style.boxShadow = `0 0 0 4px ${V[600]}1f`;
   };
   const focusOff = (e: { currentTarget: HTMLInputElement }) => {
-    e.currentTarget.style.borderColor = G300;
+    e.currentTarget.style.borderColor = G[300];
     e.currentTarget.style.boxShadow = "none";
   };
-  const labelStyle = { display: "block", fontSize: 12.5, color: G700, marginBottom: 7, fontWeight: 600 } as const;
+  const labelStyle = { display: "block", fontSize: 12.5, color: G[700], marginBottom: 7, fontWeight: 600 } as const;
 
   return (
     <form
       onSubmit={handleSubmit}
-      dir="rtl"
+      dir={lang === "ar" ? "rtl" : "ltr"}
       style={{
         width: "100%",
         maxWidth: 440,
         margin: "0 auto",
         background: "#fff",
-        border: `1px solid ${G200}`,
+        border: `1px solid ${G[200]}`,
         borderRadius: 20,
         padding: "34px 32px",
         boxShadow: "0 24px 60px -24px rgba(16,24,40,0.18)",
         fontFamily: FONT,
       }}
     >
-      <h1 style={{ fontSize: 22, color: G900, fontWeight: 800, margin: "0 0 6px" }}>تسجيل الدخول</h1>
-      <p style={{ fontSize: 13.5, color: G500, margin: "0 0 26px" }}>أدخل بياناتك للوصول إلى لوحة التحكم</p>
+      <h1 style={{ fontSize: 22, color: G[900], fontWeight: 800, margin: "0 0 6px" }}>{t("تسجيل الدخول", "Sign in")}</h1>
+      <p style={{ fontSize: 13.5, color: G[500], margin: "0 0 26px" }}>{t("أدخل بياناتك للوصول إلى لوحة التحكم", "Enter your credentials to access the dashboard")}</p>
 
       {/* Email */}
-      <label style={labelStyle}>البريد الإلكتروني</label>
+      <label style={labelStyle}>{t("البريد الإلكتروني", "Email")}</label>
       <input
         type="email"
         value={email}
@@ -117,7 +113,7 @@ export function LoginPage() {
       />
 
       {/* Password */}
-      <label style={labelStyle}>كلمة المرور</label>
+      <label style={labelStyle}>{t("كلمة المرور", "Password")}</label>
       <div style={{ position: "relative", marginBottom: 24 }}>
         <input
           type={showPassword ? "text" : "password"}
@@ -141,7 +137,7 @@ export function LoginPage() {
             transform: "translateY(-50%)",
             background: "transparent",
             border: "none",
-            color: G400,
+            color: G[400],
             cursor: "pointer",
             fontSize: 11,
             fontWeight: 600,
@@ -149,14 +145,14 @@ export function LoginPage() {
             fontFamily: "inherit",
           }}
         >
-          {showPassword ? "إخفاء" : "إظهار"}
+          {showPassword ? t("إخفاء", "Hide") : t("إظهار", "Show")}
         </button>
       </div>
 
       {/* 2FA OTP — shown only after a step-up challenge */}
       {twoFactorToken && (
         <>
-          <label style={labelStyle}>رمز التحقق الثنائي</label>
+          <label style={labelStyle}>{t("رمز التحقق الثنائي", "Two-factor code")}</label>
           <input
             value={otpCode}
             onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ""))}
@@ -167,7 +163,7 @@ export function LoginPage() {
             autoFocus
             placeholder="------"
             disabled={loggingIn}
-            style={{ ...inputBase, borderColor: V600, fontSize: 20, letterSpacing: 8, textAlign: "center", marginBottom: 24 }}
+            style={{ ...inputBase, borderColor: V[600], fontSize: 20, letterSpacing: 8, textAlign: "center", marginBottom: 24 }}
           />
         </>
       )}
@@ -179,7 +175,7 @@ export function LoginPage() {
         style={{
           width: "100%",
           padding: "13px",
-          background: loggingIn ? G300 : `linear-gradient(135deg, ${V600}, ${V800})`,
+          background: loggingIn ? G[300] : `linear-gradient(135deg, ${V[600]}, ${V[800]})`,
           color: "white",
           border: "none",
           borderRadius: 12,
@@ -187,41 +183,41 @@ export function LoginPage() {
           fontWeight: 700,
           cursor: loggingIn ? "wait" : "pointer",
           fontFamily: "inherit",
-          boxShadow: loggingIn ? "none" : `0 10px 24px -10px ${V700}`,
+          boxShadow: loggingIn ? "none" : `0 10px 24px -10px ${V[700]}`,
           transition: "transform .15s ease, box-shadow .15s ease",
         }}
         onMouseEnter={(e) => { if (!loggingIn) e.currentTarget.style.transform = "translateY(-1px)"; }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = "none"; }}
       >
-        {loggingIn ? "جاري الدخول..." : twoFactorToken ? "تأكيد الرمز" : "تسجيل الدخول"}
+        {loggingIn ? t("جاري الدخول...", "Signing in...") : twoFactorToken ? t("تأكيد الرمز", "Verify code") : t("تسجيل الدخول", "Sign in")}
       </button>
 
       <button
         type="button"
         onClick={() => setForgotting(true)}
-        style={{ display: "block", width: "100%", background: "transparent", border: "none", color: G500, fontSize: 12.5, cursor: "pointer", marginTop: 16, fontFamily: "inherit", fontWeight: 500 }}
+        style={{ display: "block", width: "100%", background: "transparent", border: "none", color: G[500], fontSize: 12.5, cursor: "pointer", marginTop: 16, fontFamily: "inherit", fontWeight: 500 }}
       >
-        نسيت كلمة المرور؟
+        {t("نسيت كلمة المرور؟", "Forgot password?")}
       </button>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "18px 0" }}>
-        <div style={{ flex: 1, height: 1, background: G200 }} />
-        <span style={{ fontSize: 11, color: G400 }}>أو</span>
-        <div style={{ flex: 1, height: 1, background: G200 }} />
+        <div style={{ flex: 1, height: 1, background: G[200] }} />
+        <span style={{ fontSize: 11, color: G[400] }}>{t("أو", "or")}</span>
+        <div style={{ flex: 1, height: 1, background: G[200] }} />
       </div>
 
       <button
         type="button"
         onClick={() => (window.location.hash = "#/onboarding")}
-        style={{ display: "block", width: "100%", background: "#fff", border: `1.5px solid ${V600}33`, color: V700, fontSize: 13, cursor: "pointer", padding: "11px", borderRadius: 12, fontFamily: "inherit", fontWeight: 700 }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = "#F5F3FF"; }}
+        style={{ display: "block", width: "100%", background: "#fff", border: `1.5px solid ${V[600]}33`, color: V[700], fontSize: 13, cursor: "pointer", padding: "11px", borderRadius: 12, fontFamily: "inherit", fontWeight: 700 }}
+        onMouseEnter={(e) => { e.currentTarget.style.background = V[50]; }}
         onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
       >
-        تسجيل شركة جديدة
+        {t("تسجيل شركة جديدة", "Register a new company")}
       </button>
 
-      <p style={{ fontSize: 11, color: G400, textAlign: "center", marginTop: 22, marginBottom: 0 }}>
-        عصب ASAB · نظام إدارة مالية المطاعم
+      <p style={{ fontSize: 11, color: G[400], textAlign: "center", marginTop: 22, marginBottom: 0 }}>
+        {t("عصب ASAB · نظام إدارة مالية المطاعم", "ASAB · Restaurant financial management")}
       </p>
     </form>
   );

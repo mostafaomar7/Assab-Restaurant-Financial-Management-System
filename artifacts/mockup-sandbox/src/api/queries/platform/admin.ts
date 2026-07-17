@@ -40,9 +40,10 @@ import {
 } from "../keys";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
-export function useAdminOverview() {
+export function useAdminOverview(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminOverview,
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<PlatformAdminOverview>("/admin/overview");
       return res.data;
@@ -52,9 +53,10 @@ export function useAdminOverview() {
 }
 
 // ─── Companies ───────────────────────────────────────────────────────────────
-export function useAdminCompanies(filter: AdminCompaniesFilter = {}) {
+export function useAdminCompanies(filter: AdminCompaniesFilter = {}, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminCompanies(filter),
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<Page<AdminCompany> | AdminCompany[]>(
         "/admin/companies",
@@ -574,9 +576,10 @@ export function useDeleteAdminBranch() {
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────
-export function useAdminUsers(filter: AdminUsersFilter = {}) {
+export function useAdminUsers(filter: AdminUsersFilter = {}, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminUsers(filter),
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<Page<AdminUserRow> | AdminUserRow[]>(
         "/admin/users",
@@ -943,6 +946,28 @@ export function useChangeSubscriptionPlan() {
         queryKey: ["platform", "admin", "subscriptions"],
       });
       toast.success("تم تغيير الخطة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Update the modules enabled on a subscription — PATCH /admin/subscriptions/{id}/modules. */
+export function useUpdateSubscriptionModules() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, modules }: { id: string; modules: string[] }) => {
+      const res = await api.patch<AdminSubscription>(
+        `/admin/subscriptions/${id}/modules`,
+        { modules },
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ["platform", "admin", "subscriptions"],
+      });
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
+      toast.success("تم تحديث الموديولات");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

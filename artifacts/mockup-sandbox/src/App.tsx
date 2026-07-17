@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ComponentType } from "react";
 import { modules as discoveredModules } from "./.generated/mockup-components";
 import { EntryFlow } from "./auth/EntryFlow";
 import { V, G, CYAN, LOGO, ensureAuthStyles } from "./auth/authTheme";
+import { useSiteLang } from "./auth/siteLang";
+import { LangToggle } from "./auth/LangToggle";
 import { readEntrySelection } from "./auth/entrySelection";
 import { useAuth } from "./auth/AuthContext";
 import { OnboardingWizard } from "./auth/OnboardingWizard";
@@ -130,35 +132,44 @@ function resolveLandingSlug(defaultPage: string | null, role: string | undefined
 
 // ─── ASAB Landing Page (only shown for logged-in users — picks a dashboard) ──
 function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: string }) {
+  const [lang, setLang, t] = useSiteLang();
   const dashboards = [
     {
       slug: "asab/ASABPrototype",
-      title: "الداشبورد الرئيسي",
-      subtitle: "منظومة عصب الكاملة",
-      description:
+      title: t("الداشبورد الرئيسي", "Main Dashboard"),
+      subtitle: t("منظومة عصب الكاملة", "The complete ASAB suite"),
+      description: t(
         "إدارة مالية متكاملة — المبيعات، المصروفات، المشتريات، المخزون، الشفتات، العهد النقدية، والأصول الثابتة.",
-      roles: ["محاسب", "رئيس حسابات", "مدير فرع", "مدير مشتريات", "مشرف", "أدمن"],
-      badge: "9 موديولات · 6 أدوار · خط اعتماد 6 مراحل",
+        "End-to-end finance — sales, expenses, purchases, inventory, shifts, petty cash, and fixed assets.",
+      ),
+      roles: t(
+        ["محاسب", "رئيس حسابات", "مدير فرع", "مدير مشتريات", "مشرف", "أدمن"],
+        ["Accountant", "Head", "Branch Mgr", "Procurement", "Supervisor", "Admin"],
+      ),
       icon: "🏢",
     },
     {
       slug: "asab/CompanyDashboard",
-      title: "بوابة الشركات",
-      subtitle: "مجموعة التاج — بوابة المؤسسات",
-      description:
+      title: t("بوابة الشركات", "Enterprise Portal"),
+      subtitle: t("مجموعة التاج — بوابة المؤسسات", "Al-Taj Group — Enterprise portal"),
+      description: t(
         "لوحة إدارة متعددة الفروع لمجموعات المطاعم — مراجعة البيانات وتدقيق العمليات عبر جميع العلامات التجارية.",
-      roles: ["أدمن الشركة", "رئيس حسابات", "محاسب", "مدير فرع", "مدير مشتريات"],
-      badge: "5 أدوار · 4 علامات تجارية · متعدد الفروع",
+        "Multi-branch management for restaurant groups — review data and audit operations across all brands.",
+      ),
+      roles: t(
+        ["أدمن الشركة", "رئيس حسابات", "محاسب", "مدير فرع", "مدير مشتريات"],
+        ["Company Admin", "Head", "Accountant", "Branch Mgr", "Procurement"],
+      ),
       icon: "🏨",
     },
-  ] as const;
+  ];
 
   return (
-    <div className="asab-landing">
+    <div className="asab-landing" dir={lang === "ar" ? "rtl" : "ltr"} style={{ direction: lang === "ar" ? "rtl" : "ltr" }}>
       <div className="asab-blob asab-blob--a" style={{ width: 340, height: 340, background: V[300], opacity: 0.3, top: -120, insetInlineStart: -80 }} />
       <div className="asab-blob asab-blob--b" style={{ width: 320, height: 320, background: CYAN, opacity: 0.12, bottom: -120, insetInlineEnd: -60 }} />
 
-      {/* Top bar: logo + welcome + logout */}
+      {/* Top bar: logo + language + welcome + logout */}
       <header
         style={{
           position: "relative",
@@ -174,8 +185,9 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
       >
         <img src={LOGO} alt="ASAB — عصب" style={{ height: 34, width: "auto" }} />
         <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <LangToggle lang={lang} onChange={setLang} variant="light" />
           <span style={{ fontSize: 13, color: G[600] }}>
-            مرحباً، <span style={{ color: G[900], fontWeight: 700 }}>{userName}</span>
+            {t("مرحباً،", "Welcome,")} <span style={{ color: G[900], fontWeight: 700 }}>{userName}</span>
           </span>
           <button
             onClick={onLogout}
@@ -194,7 +206,7 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
             onMouseEnter={(e) => { e.currentTarget.style.background = "#FEF2F2"; }}
             onMouseLeave={(e) => { e.currentTarget.style.background = "#fff"; }}
           >
-            تسجيل الخروج
+            {t("تسجيل الخروج", "Sign out")}
           </button>
         </div>
       </header>
@@ -202,8 +214,8 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
       {/* Main — dashboard picker */}
       <main style={{ position: "relative", flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "44px 24px" }}>
         <div className="asab-rise" style={{ textAlign: "center", marginBottom: 30 }}>
-          <h1 style={{ fontSize: 27, fontWeight: 800, color: G[900], margin: 0, letterSpacing: "-0.01em" }}>اختر الداشبورد</h1>
-          <p style={{ fontSize: 14, color: G[500], margin: "8px 0 0" }}>ابدأ من حيث تحتاج — كل داشبورد بمستخدميه وصلاحياته</p>
+          <h1 style={{ fontSize: 27, fontWeight: 800, color: G[900], margin: 0, letterSpacing: "-0.01em" }}>{t("اختر الداشبورد", "Choose a dashboard")}</h1>
+          <p style={{ fontSize: 14, color: G[500], margin: "8px 0 0" }}>{t("ابدأ من حيث تحتاج — كل داشبورد بمستخدميه وصلاحياته", "Start where you need — each dashboard has its own users and permissions")}</p>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, width: "100%", maxWidth: 860 }}>
@@ -220,7 +232,7 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
                   <div style={{ fontSize: 18, fontWeight: 800, color: G[900] }}>{d.title}</div>
                   <div style={{ fontSize: 12.5, color: V[600], fontWeight: 600, marginTop: 2 }}>{d.subtitle}</div>
                 </div>
-                <div style={{ color: V[600], fontSize: 22, fontWeight: 700 }}>←</div>
+                <div style={{ color: V[600], fontSize: 22, fontWeight: 700 }}>{t("←", "→")}</div>
               </div>
               <p style={{ fontSize: 13, color: G[600], lineHeight: 1.7, margin: "0 0 14px" }}>{d.description}</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
@@ -229,7 +241,7 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
                 ))}
               </div>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: `linear-gradient(135deg, ${V[600]}, ${V[800]})`, color: "white", padding: "10px 22px", borderRadius: 12, fontSize: 13, fontWeight: 700, boxShadow: `0 10px 24px -12px ${V[700]}` }}>
-                فتح الداشبورد ←
+                {t("فتح الداشبورد ←", "Open dashboard →")}
               </div>
             </a>
           ))}
@@ -237,7 +249,7 @@ function ASABLanding({ onLogout, userName }: { onLogout: () => void; userName: s
       </main>
 
       <footer style={{ position: "relative", textAlign: "center", padding: "16px 24px 28px", borderTop: `1px solid ${G[200]}` }}>
-        <p style={{ fontSize: 12, color: G[400], margin: 0 }}>عصب ASAB · نظام إدارة مالية المطاعم · النسخة التجريبية 2.0</p>
+        <p style={{ fontSize: 12, color: G[400], margin: 0 }}>{t("عصب ASAB · نظام إدارة مالية المطاعم · النسخة التجريبية 2.0", "ASAB · Restaurant financial management · Beta 2.0")}</p>
       </footer>
     </div>
   );
@@ -291,9 +303,9 @@ function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "linear-gradient(145deg, #0A1628 0%, #0F1C35 40%, #1B3A6B 100%)",
+          background: "#F9FAFB",
           fontFamily: "'IBM Plex Sans Arabic', system-ui, sans-serif",
-          color: "#94a3b8",
+          color: "#667085",
           fontSize: 14,
         }}
       >
@@ -341,9 +353,9 @@ function App() {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          background: "linear-gradient(145deg, #0A1628 0%, #0F1C35 40%, #1B3A6B 100%)",
+          background: "#F9FAFB",
           fontFamily: "'IBM Plex Sans Arabic', system-ui, sans-serif",
-          color: "#94a3b8",
+          color: "#667085",
           fontSize: 14,
         }}
       >

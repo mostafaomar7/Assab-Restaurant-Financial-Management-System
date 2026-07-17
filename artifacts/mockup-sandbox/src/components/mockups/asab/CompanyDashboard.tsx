@@ -79,6 +79,9 @@ import { ChangePasswordModal } from "../../../auth/ChangePasswordModal";
 import { useLanguagePref } from "../../../auth/useLanguagePref";
 import { readEntrySelection, clearEntrySelection } from "../../../auth/entrySelection";
 import { useAuth } from "../../../auth/AuthContext";
+import { getSiteLang, setSiteLang } from "../../../auth/siteLang";
+import { V, G, CYAN, LOGO, ensureAuthStyles } from "../../../auth/authTheme";
+import { LangToggle } from "../../../auth/LangToggle";
 import { NotificationPreferencesPage } from "../../shared/NotificationPreferencesPage";
 import { TwoFactorSetupWizard } from "../../shared/TwoFactorSetupWizard";
 import { ApiKeysPage } from "../../shared/ApiKeysPage";
@@ -305,7 +308,9 @@ function CAssetDraftProvider({ children }:{ children:ReactNode }) {
 }
 
 function CLangProvider({ children }:{ children:ReactNode }) {
-  const [lang, setLang] = useState<CLang>("ar");
+  // Seed from the site-wide language chosen on the entry screen, and keep the two in sync.
+  const [lang, setLangState] = useState<CLang>(() => getSiteLang());
+  const setLang = (l:CLang) => { setSiteLang(l); setLangState(l); };
   const t   = (ar:string, en:string) => lang==="ar" ? ar : en;
   const dir = lang==="ar" ? "rtl" : "ltr";
   return (
@@ -870,51 +875,63 @@ const DEFAULT_PAGE:Record<CRole,string> = {
 // ═══════════════════════════════════════════════════
 // LOGIN SCREEN
 // ═══════════════════════════════════════════════════
+const C_ROLE_ACCENT: Record<CRole, string> = {
+  "company-admin": V[700],
+  head: "#3b82f6",
+  accountant: CYAN,
+  branch: "#10b981",
+  procurement: "#f59e0b",
+};
 function CompanyLoginScreen({ onSelect }:{ onSelect:(r:CRole)=>void }) {
-  const { lang, setLang, t, dir } = useCLang();
+  const { lang, setLang, t } = useCLang();
+  ensureAuthStyles();
   return (
-    <div className="min-h-screen flex items-center justify-center p-6 relative" dir={dir}
-      style={{ background:"linear-gradient(135deg,#0F1C35 0%,#1B3A6B 60%,#2D1B69 100%)" }}>
-      <button
-        onClick={()=>setLang(lang==="ar"?"en":"ar")}
-        className="absolute top-4 left-4 flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 hover:text-white transition-all text-xs font-semibold z-10">
-        <Globe size={13}/>
-        {lang==="ar" ? "English" : "عربي"}
-      </button>
-      <div className="w-full max-w-2xl">
-        <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl mb-4"
-            style={{ background:"linear-gradient(135deg,#7C3AED,#00D9FF)" }}>
-            <span className="text-3xl">👑</span>
-          </div>
-          <h1 className="text-3xl font-black text-white">{t("بوابة الشركات","Company Portal")}</h1>
-          <p className="text-blue-300 mt-2 text-sm">
-            {t("مدعوم بنظام","Powered by")} <span className="text-cyan-400 font-bold">{t("عصب","ASAB")}</span> — {t("مخصص لمجموعات المطاعم","for restaurant groups")}
-          </p>
-          <div className="mt-3 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/10 border border-white/20">
-            <span className="text-white/70 text-xs">{COMPANY.name}</span>
-            <span className="text-cyan-400 text-xs font-bold">● {t("متصل","Connected")}</span>
-          </div>
+    <div className="asab-landing" dir={lang==="ar"?"rtl":"ltr"} style={{ direction: lang==="ar"?"rtl":"ltr" }}>
+      <div className="asab-blob asab-blob--a" style={{ width:340, height:340, background:V[300], opacity:0.3, top:-120, insetInlineStart:-80 }} />
+      <div className="asab-blob asab-blob--b" style={{ width:320, height:320, background:CYAN, opacity:0.12, bottom:-120, insetInlineEnd:-60 }} />
+
+      {/* Top bar: logo + language */}
+      <header style={{ position:"relative", display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px 28px", borderBottom:`1px solid ${G[200]}`, background:"rgba(255,255,255,0.75)", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" }}>
+        <img src={LOGO} alt="ASAB — عصب" style={{ height:34, width:"auto" }} />
+        <LangToggle lang={lang} onChange={setLang} variant="light" />
+      </header>
+
+      {/* Main — role picker */}
+      <main style={{ position:"relative", flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"44px 24px" }}>
+        <div className="asab-rise" style={{ textAlign:"center", marginBottom:30 }}>
+          <h1 style={{ fontSize:27, fontWeight:800, color:G[900], margin:0, letterSpacing:"-0.01em" }}>{t("بوابة الشركات","Enterprise Portal")}</h1>
+          <p style={{ fontSize:14, color:G[500], margin:"8px 0 0" }}>{t("اختر المستخدم للمتابعة — كل دور بصلاحياته وشاشاته","Choose a user to continue — each role has its own permissions and screens")}</p>
         </div>
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          {(Object.entries(ROLE_META) as [CRole, typeof ROLE_META[CRole]][]).map(([id,meta])=>{
+
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(2,1fr)", gap:16, width:"100%", maxWidth:720 }}>
+          {(Object.entries(ROLE_META) as [CRole, typeof ROLE_META[CRole]][]).map(([id,meta], i)=>{
             const enMeta = EN_C_ROLE_META[id as CRoleKey];
+            const accent = C_ROLE_ACCENT[id] ?? V[600];
             return (
-              <button key={id} onClick={()=>onSelect(id)}
-                className={`relative bg-white/8 backdrop-blur-sm rounded-2xl p-5 border border-white/15 hover:border-white/40 hover:bg-white/15 transition-all group ${dir==="rtl"?"text-right":"text-left"}`}>
-                {id==="company-admin"&&<div className={`absolute top-3 ${dir==="rtl"?"left-3":"right-3"}`}><Badge className="bg-purple-500/30 text-purple-300 border border-purple-400/40 text-[10px]">{t("مميز","Premium")}</Badge></div>}
-                <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl mb-3 ${meta.color} shadow-lg`}>{meta.icon}</div>
-                <p className="font-bold text-white text-base">{t(meta.label, enMeta.label)}</p>
-                <p className="text-white/50 text-xs mt-1 leading-relaxed">{t(meta.desc, enMeta.desc)}</p>
-                <ChevronRight size={14} className={`absolute ${dir==="rtl"?"left-4":"right-4"} top-1/2 -translate-y-1/2 text-white/30 group-hover:text-white/70 ${dir==="ltr"?"rotate-180":""}`}/>
+              <button
+                key={id}
+                type="button"
+                className="asab-role asab-rise"
+                style={{ animationDelay:`${i*60}ms`, textAlign:"center" }}
+                onClick={()=>onSelect(id)}
+                onMouseEnter={(e)=>{ e.currentTarget.style.borderColor = accent; }}
+                onMouseLeave={(e)=>{ e.currentTarget.style.borderColor = G[200]; }}
+              >
+                <div style={{ width:52, height:52, borderRadius:14, margin:"0 auto 12px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:24, background:`${accent}14`, border:`1px solid ${accent}33` }}>{meta.icon}</div>
+                <div style={{ color:G[900], fontWeight:700, fontSize:15, marginBottom:4 }}>{t(meta.label, enMeta.label)}</div>
+                <div style={{ color:G[500], fontSize:12, lineHeight:1.6, minHeight:30 }}>{t(meta.desc, enMeta.desc)}</div>
+                {id==="company-admin" && (
+                  <span style={{ display:"inline-block", marginTop:10, padding:"3px 12px", borderRadius:99, fontSize:10.5, fontWeight:700, background:`${accent}14`, color:accent, border:`1px solid ${accent}33` }}>{t("مميز","Premium")}</span>
+                )}
               </button>
             );
           })}
         </div>
-        <p className="text-center text-white/30 text-xs">
-          {t("نظام عصب · الإدارة المالية لمجموعات المطاعم · v2.1","ASAB System · Financial Management for Restaurant Groups · v2.1")}
-        </p>
-      </div>
+      </main>
+
+      <footer style={{ position:"relative", textAlign:"center", padding:"16px 24px 28px", borderTop:`1px solid ${G[200]}` }}>
+        <p style={{ fontSize:12, color:G[400], margin:0 }}>{t("عصب ASAB · الإدارة المالية لمجموعات المطاعم · النسخة التجريبية 2.0","ASAB · Financial management for restaurant groups · Beta 2.0")}</p>
+      </footer>
     </div>
   );
 }
@@ -6543,8 +6560,14 @@ function PageRouter({ role, page, navigate, ops, approve, reject, requestClarifi
 function CompanyDashboardInner() {
   const { t } = useCLang();
   const { logout: authLogout } = useAuth();
-  const [role, setRole] = useState<CRole|null>(null);
-  const [page, setPage] = useState<string>("");
+  // Seed the role synchronously from the pre-login entry pick so we never flash the
+  // legacy in-mockup role picker for a frame before adopting it.
+  const initSel = readEntrySelection();
+  const initRole = initSel?.slug === "asab/CompanyDashboard" && initSel.role && (initSel.role in DEFAULT_PAGE)
+    ? (initSel.role as CRole)
+    : null;
+  const [role, setRole] = useState<CRole|null>(initRole);
+  const [page, setPage] = useState<string>(initRole ? DEFAULT_PAGE[initRole] : "");
   const { ops, approve, reject, requestClarification, finalApprove, bulkApprove, bulkFinalApprove, rejectModalProps, clarifyModalProps } = useSharedOps();
 
   // Tag the current history entry with a page so Back/Forward can restore it.
@@ -6557,9 +6580,9 @@ function CompanyDashboardInner() {
   };
   const selectRole = (r:CRole) => { setRole(r); setPage(DEFAULT_PAGE[r]); tagHistory(DEFAULT_PAGE[r], true); };
   const navigate   = (p:string) => { setPage(p); tagHistory(p); };
-  // Real sign-out: clear the pre-login pick + the auth session so the sidebar
-  // "logout" returns to the entry flow, not the in-mockup role picker.
-  const logout     = () => { clearEntrySelection(); setRole(null); setPage(""); void authLogout(); };
+  // Real sign-out: clear the pre-login pick + the auth session. Leave the current view
+  // in place until the auth state flips (App unmounts us) so no legacy picker flashes.
+  const logout     = () => { clearEntrySelection(); void authLogout(); };
 
   // Browser Back/Forward → restore the previous internal page (URL stays on the preview hash).
   useEffect(() => {
