@@ -610,6 +610,10 @@ export function useCreateAdminUser() {
       scope?: "all" | "brand" | "restaurant" | "branch";
       status?: "active" | "inactive";
       sendLoginEmail?: boolean;
+      /** role=supplier: links the login to an existing supplier record. */
+      supplierId?: string;
+      /** role=branch: company the branch belongs to (required by the provisioner). */
+      companyId?: string;
     }) => {
       const res = await api.post<AdminUserRow>("/admin/users", body);
       return res.data;
@@ -745,6 +749,41 @@ export function useDeactivateAdminUser() {
       toast.success("تم إيقاف المستخدم");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Suppliers (admin-scoped picker for role=supplier user create) ────────────
+export interface AdminSupplierRow {
+  id: string;
+  name: string;
+  contactEmail: string | null;
+  companyId?: string;
+  status?: string;
+  /** true when a login already exists — picking it would 422 SUPPLIER_LOGIN_AMBIGUOUS. */
+  hasLogin?: boolean;
+}
+export interface AdminSuppliersFilter {
+  companyId?: string;
+  search?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}
+export function useAdminSuppliers(
+  filter: AdminSuppliersFilter = {},
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "suppliers", filter] as const,
+    enabled: opts.enabled,
+    queryFn: async () => {
+      const res = await api.get<Page<AdminSupplierRow> | AdminSupplierRow[]>(
+        "/admin/suppliers",
+        { params: filter },
+      );
+      const d = res.data as Page<AdminSupplierRow> | AdminSupplierRow[];
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
   });
 }
 

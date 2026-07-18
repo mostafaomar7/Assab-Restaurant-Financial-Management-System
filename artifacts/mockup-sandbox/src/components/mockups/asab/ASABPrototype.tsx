@@ -1,4 +1,5 @@
 import "./_group.css";
+import { toast } from "sonner";
 import { useState, useEffect, useMemo, ReactNode, createContext, useContext, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import {
   KeyRound, Webhook, History,
@@ -62,6 +63,7 @@ import {
   useRenewSubscription,
   useChangeSubscriptionPlan,
   useUpdateSubscriptionModules,
+  useAdminSuppliers,
   useSuspendSubscription,
   useActivateSubscription,
   useToggleAutoReminder,
@@ -97,6 +99,7 @@ import {
   useAdminUploadEmployees,
   useAdminUploadFixedAssets,
   useAdminUploadTemplate,
+  useAdminBrandUploadStatus,
   useExportOperations,
   useExportHeadOperations,
   useExportAssets,
@@ -258,6 +261,7 @@ interface AdminUserData {
   scope: "all" | "brand" | "restaurant" | "branch";
   status: "active" | "inactive";
   createdAt?: string; lastLoginAt?: string;
+  supplierId?: string; companyId?: string;
 }
 type RoleId = "admin" | "head" | "accountant" | "branch" | "procurement" | "supplier";
 type PageId = string;
@@ -1264,6 +1268,7 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const [selRests,  setSelRests]    = useState<string[]>([]);
   const [selBranches, setSelBranches] = useState<string[]>([]);
   const [selModules, setSelModules] = useState<string[]>(["المبيعات","المصروفات"]);
+  const [supplierId, setSupplierId] = useState("");
 
   const isBranchManager   = role === "مدير فرع";
   const isChief           = role === "رئيس حسابات";
@@ -1277,8 +1282,12 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const headOptions = (Array.isArray(usersApi) ? (usersApi as any[]) : [])
     .filter(u => u?.role === "رئيس حسابات" || u?.role === "head")
     .map(u => ({ id: u.id as string, name: u.name as string }));
+  // Suppliers for the role=supplier picker (GET /admin/suppliers). Only fetched for that role.
+  const { data: suppliersApi } = useAdminSuppliers({}, { enabled: isMorrad });
+  const supplierOptions = (Array.isArray(suppliersApi) ? (suppliersApi as any[]) : [])
+    .map(s => ({ id: s.id as string, name: s.name as string, contactEmail: (s.contactEmail ?? null) as string|null, hasLogin: !!s.hasLogin }));
   const brandList = (Array.isArray(brandsApi) ? brandsApi : []).map((b:any)=>({
-    id: b.id, name: b.name, color: b.color ?? "#7C3AED",
+    id: b.id, name: b.name, color: b.color ?? "#7C3AED", companyId: b.companyId as string|undefined,
     abbr: b.abbr ?? (typeof b.name === "string" ? b.name.slice(0,2) : "؟"),
     restaurants: (b.restaurants ?? []).map((r:any)=>({
       id: r.id, name: r.name,
@@ -1287,6 +1296,8 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   }));
   const availableRests = brandList.filter(b=>selBrands.includes(b.name)).flatMap(b=>b.restaurants);
   const availableBranches = availableRests.filter(r=>selRests.includes(r.name)).flatMap(r=>r.branches);
+  // Company of the selected brand — required by the backend for role=branch provisioning.
+  const selectedBrandCompanyId = brandList.find(b=>selBrands.includes(b.name))?.companyId;
 
   const scopeFor = (): AdminUserData["scope"] => {
     if(selBranches.length>0) return "branch";
@@ -1316,10 +1327,15 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   //  branch mgr    → exactly one branch (so brand + restaurant + branch must all be picked)
   //  everyone else → at least one brand
   const canNext1 = isMorrad
-    ? true
+    ? supplierId !== ""
     : isBranchManager
       ? selBranches.length === 1
       : selBrands.length > 0;
+  const isAccountant = role === "محاسب";
+  // Business rule (ADM-3.4): an accountant MUST report to a head accountant (approval chain).
+  const canSubmit = name.trim() !== ""
+    && (!isAccountant || reportsTo !== "")
+    && (!isMorrad || supplierId !== "");
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" dir={dir}>
@@ -1376,9 +1392,32 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
 
           {step===1 && <>
             {isMorrad
-              ? <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
-                  <p className="font-semibold">{t("المورد لا يحتاج تخصيص مطاعم","Supplier does not require restaurant assignment")}</p>
-                  <p className="text-xs mt-1 text-amber-500">{t("يتعامل المورد مع طلبات التوريد المرسلة إليه مباشرةً من مدير المشتريات.","The supplier handles supply orders sent directly by the Procurement Manager.")}</p>
+              ? <div className="space-y-3">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
+                    {t("المورد لا يحتاج تخصيص مطاعم — يُربط بسجل مورد موجود، ويُستخدم بريده لتسجيل الدخول على التطبيق.","A supplier needs no restaurant assignment — link an existing supplier record; its email is used for mobile login.")}
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("اختر المورد","Select Supplier")} <span className="text-red-500">*</span></label>
+                    {supplierOptions.length === 0 ? (
+                      <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-500">
+                        {t("لا يوجد موردون متاحون — أضف موردين للشركة أولاً.","No suppliers available — add company suppliers first.")}
+                      </div>
+                    ) : (
+                      <select value={supplierId}
+                        onChange={e=>{ const id=e.target.value; setSupplierId(id); const s=supplierOptions.find(x=>x.id===id); if(s?.contactEmail) setEmail(s.contactEmail); }}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-purple-300">
+                        <option value="">{t("— اختر موردًا —","— Select a supplier —")}</option>
+                        {supplierOptions.map(s=>{
+                          const blocked = !s.contactEmail || s.hasLogin;
+                          const suffix = !s.contactEmail ? t(" (بلا بريد)"," (no email)") : s.hasLogin ? t(" (لديه حساب)"," (has login)") : "";
+                          return <option key={s.id} value={s.id} disabled={blocked}>{s.name}{suffix}</option>;
+                        })}
+                      </select>
+                    )}
+                    {supplierId && (
+                      <p className="text-[11px] text-gray-400 mt-1.5">{t("البريد مقفول على بريد المورد لضمان دخول التطبيق:","Email is locked to the supplier's contact email for mobile login:")} <span dir="ltr" className="font-mono">{email||"—"}</span></p>
+                    )}
+                  </div>
                 </div>
               : <>
                 <div>
@@ -1402,13 +1441,19 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   )}
                 </div>
 
-                {/* Restaurant picker — needed for branch managers (one) and optional for accountants.
-                    If the chosen brand has no restaurants yet, tell the admin to add one first. */}
-                {selBrands.length>0 && !isChief && (
+                {/* Restaurant picker — branch managers only (exactly one). Accountants are
+                    brand-scoped at creation; their per-restaurant assignment is done later on
+                    the التوزيع (Distribution) screen — sending restaurants here would 422. */}
+                {!isChief && !isBranchManager && selBrands.length>0 && (
+                  <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-xs text-blue-700">
+                    {t("المحاسب يُنشأ على مستوى العلامة. تخصيص مطاعم محددة له يتم من شاشة «توزيع المطاعم» بعد الإنشاء.","The accountant is created at brand level. Assign specific restaurants later from the “Distribute Restaurants” screen.")}
+                  </div>
+                )}
+                {isBranchManager && selBrands.length>0 && (
                   <div>
                     <label className="text-xs font-semibold text-gray-600 block mb-2">
-                      {isBranchManager ? t("اختر المطعم (واحد فقط)","Select Restaurant (one only)") : t("تخصيص المطاعم","Assign Restaurants")}
-                      {isBranchManager && <span className="text-red-500"> *</span>}
+                      {t("اختر المطعم (واحد فقط)","Select Restaurant (one only)")}
+                      <span className="text-red-500"> *</span>
                     </label>
                     {availableRests.length === 0 ? (
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700">
@@ -1489,11 +1534,11 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
 
             {role==="محاسب" && (
               <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">{t("يرفع تقاريره إلى","Reports To")}</label>
+                <label className="text-xs font-semibold text-gray-600 block mb-1">{t("يرفع تقاريره إلى","Reports To")} <span className="text-red-500">*</span></label>
                 {headOptions.length > 0 ? (
-                  <select value={reportsTo} onChange={e=>setReportsTo(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                  <select value={reportsTo} onChange={e=>setReportsTo(e.target.value)} className={`w-full border rounded-lg px-3 py-2 text-sm ${reportsTo?"border-gray-200":"border-red-300"}`}>
                     <option value="">{t("— اختر رئيس الحسابات المباشر —","— Select Direct Head Accountant —")}</option>
-                    {headOptions.map(h=><option key={h.id} value={h.name}>{h.name}</option>)}
+                    {headOptions.map(h=><option key={h.id} value={h.id}>{h.name}</option>)}
                   </select>
                 ) : (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
@@ -1526,10 +1571,21 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                 className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors ${ (step===0&&canNext0)||(step===1&&canNext1) ? "bg-purple-600 text-white hover:bg-purple-700":"bg-gray-200 text-gray-400 cursor-not-allowed"}`}>
                 {en?"Next →":"التالي ←"}
               </button>
-            : <button onClick={()=>{ if(!name.trim()) return;
-                // Branch managers carry neither module permissions nor a direct supervisor.
-                onAdd({ name,email,phone,role,brands:selBrands,restaurants:selRests,branches:selBranches,modules:isBranchManager?[]:selModules,reportsTo:isBranchManager?"":reportsTo,scope:scopeFor(),status:"active" });
-              }} className="px-6 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">
+            : <button disabled={!canSubmit} onClick={()=>{ if(!canSubmit) return;
+                // Branch managers carry neither module permissions nor a direct supervisor;
+                // suppliers link to a supplier record; branch users must carry their company id.
+                onAdd({
+                  name, email, phone, role,
+                  brands: isMorrad ? [] : selBrands,
+                  restaurants: selRests,          // [] for accountants (assigned later via Distribution)
+                  branches: selBranches,
+                  modules: isBranchManager ? [] : selModules,
+                  reportsTo: isBranchManager ? "" : reportsTo,
+                  scope: scopeFor(), status: "active",
+                  ...(isMorrad && supplierId ? { supplierId } : {}),
+                  ...(isBranchManager && selectedBrandCompanyId ? { companyId: selectedBrandCompanyId } : {}),
+                });
+              }} className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors ${canSubmit?"bg-purple-600 text-white hover:bg-purple-700":"bg-gray-200 text-gray-400 cursor-not-allowed"}`}>
                 ✓ {t("إضافة المستخدم","Add User")}
               </button>
           }
@@ -1757,7 +1813,13 @@ function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove
           onAdd={u=>{
             const roleKey = ({ "محاسب":"accountant","رئيس حسابات":"head","مدير فرع":"branch","مدير مشتريات":"procurement","مورد":"supplier","أدمن":"admin" } as Record<string,string>)[u.role] ?? u.role;
             setAdminUsers(prev=>[...prev,u]);
-            createAdminUserMut.mutate({ ...u, role: roleKey } as any);
+            createAdminUserMut.mutate({ ...u, role: roleKey } as any, {
+              onSuccess:(data:any)=>{
+                if(data && data.emailSent===false){
+                  toast.error(tL("تم إنشاء المستخدم لكن تعذّر إرسال كلمة المرور على البريد — استخدم «إعادة تعيين كلمة المرور» لإعادة الإرسال.","User created, but the password email failed to send — use “Reset password” to resend."));
+                }
+              },
+            });
             setModal(null);
           }}
           onClose={()=>setModal(null)}/>
@@ -11104,6 +11166,9 @@ function AdminRestaurants({}: PageProps) {
   const createRestMut = useCreateAdminRestaurant();
   const createBranchMut = useCreateAdminBranch();
   const updateRestMut = useUpdateAdminRestaurant();
+  const uploadBrandMut = useAdminUploadBrand();
+  const uploadEmpMut = useAdminUploadEmployees();
+  const templateMut = useAdminUploadTemplate();
   const { data: companiesApi } = useAdminCompanies();
   const companyOptions = (((companiesApi as any)?.data ?? companiesApi ?? []) as any[]);
   // Packages now come from GET /admin/packages (show active only). The brand's
@@ -11145,14 +11210,62 @@ function AdminRestaurants({}: PageProps) {
   const [restTab, setRestTab]               = useState<"structure"|"upload">("structure");
   type UploadKey = "sales"|"materials"|"employees"|"suppliers";
   const [uploadBrand,   setUploadBrand]     = useState<string>("reem");
-  const [brandUploads,  setBrandUploads]    = useState<Record<string,Record<UploadKey,boolean>>>({
-    reem:     { sales:true,  materials:true,  employees:false, suppliers:false },
-    herfy:    { sales:true,  materials:false, employees:false, suppliers:false },
-    mcd:      { sales:false, materials:false, employees:false, suppliers:false },
-    broasted: { sales:false, materials:false, employees:false, suppliers:false },
-  });
+  // No fake seed — the real done-state is synced from GET /admin/brands/{id}/upload-status.
+  const [brandUploads,  setBrandUploads]    = useState<Record<string,Record<UploadKey,boolean>>>({});
   const setUploaded = (brandId:string, key:UploadKey) =>
-    setBrandUploads(p=>({...p,[brandId]:{...p[brandId],[key]:true}}));
+    setBrandUploads(p=>({...p,[brandId]:{...(p[brandId] ?? { sales:false, materials:false, employees:false, suppliers:false }),[key]:true}}));
+  // Reflect the truthful server state (shared.* only turns true after a successful upload).
+  const { data: uploadStatusApi } = useAdminBrandUploadStatus(uploadBrand);
+  useEffect(() => {
+    const shared = (uploadStatusApi as any)?.shared;
+    if (!shared) return;
+    setBrandUploads(p=>({ ...p, [uploadBrand]: {
+      ...(p[uploadBrand] ?? { sales:false, materials:false, employees:false, suppliers:false }),
+      sales: !!shared.sales, materials: !!shared.materials, suppliers: !!shared.suppliers,
+    }}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadStatusApi, uploadBrand]);
+  // Real brand-level upload: validate size/type client-side, POST the file, report the result.
+  const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+  const doBrandUpload = (type: "sales-items"|"raw-materials"|"suppliers", localKey: UploadKey, file: File) => {
+    const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+    if (!["xlsx","csv","txt"].includes(ext)) {
+      toast.error(t("صيغة غير مدعومة — استخدم ملف Excel (.xlsx) أو CSV.","Unsupported format — use an Excel (.xlsx) or CSV file."));
+      return;
+    }
+    if (file.size > MAX_UPLOAD_BYTES) {
+      toast.error(t("حجم الملف أكبر من 2 ميجابايت.","File is larger than 2 MB."));
+      return;
+    }
+    uploadBrandMut.mutate({ brandId: uploadBrand, type, file }, {
+      onSuccess: (data:any) => {
+        const rows = data?.uploadedCount ?? data?.rowsImported ?? 0;
+        const errs = Array.isArray(data?.errors) ? data.errors : [];
+        if (rows > 0) setUploaded(uploadBrand, localKey);
+        if (errs.length) {
+          toast.error(t(`تم استيراد ${rows} صف مع ${errs.length} خطأ — أول خطأ: صف ${errs[0].row}: ${errs[0].message}`,`Imported ${rows} rows with ${errs.length} error(s) — first: row ${errs[0].row}: ${errs[0].message}`));
+        } else {
+          toast.success(t(`تم استيراد ${rows} صف بنجاح.`,`Imported ${rows} rows successfully.`));
+        }
+      },
+      // EMPTY_FILE / INVALID_HEADER / INVALID_INPUT surface via the hook's onError (error.messageAr).
+    });
+  };
+  // Per-restaurant employees upload (real restaurant id → /admin/restaurants/{id}/upload/employees).
+  const doEmpUpload = (restId: string, file: File) => {
+    const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+    if (!["xlsx","csv","txt"].includes(ext)) { toast.error(t("صيغة غير مدعومة — استخدم Excel أو CSV.","Unsupported format — use Excel or CSV.")); return; }
+    if (file.size > MAX_UPLOAD_BYTES) { toast.error(t("حجم الملف أكبر من 2 ميجابايت.","File is larger than 2 MB.")); return; }
+    uploadEmpMut.mutate({ restaurantId: restId, file }, {
+      onSuccess: (data:any) => {
+        const rows = data?.uploadedCount ?? 0;
+        const errs = Array.isArray(data?.errors) ? data.errors : [];
+        setUploaded(`${uploadBrand}_${restId}`, "employees");
+        if (errs.length) toast.error(t(`تم استيراد ${rows} موظف مع ${errs.length} خطأ.`,`Imported ${rows} employees with ${errs.length} error(s).`));
+        else toast.success(t(`تم استيراد ${rows} موظف بنجاح.`,`Imported ${rows} employees successfully.`));
+      },
+    });
+  };
   const [branchAssets, setBranchAssets] = useState<Record<string,boolean>>({
     "reem_r1_0":true, "reem_r1_1":false,
     "reem_r2_0":false,"reem_r2_1":false,
@@ -11240,8 +11353,8 @@ function AdminRestaurants({}: PageProps) {
         const restEmpDone = (rid:string) => brandUploads[empKey(rid)]?.employees ?? false;
         const setRestEmp  = (rid:string) => setUploaded(empKey(rid),"employees");
 
-        type UploadCardProps = { icon:React.ReactNode; iconBg:string; title:string; subtitle:string; cols:string[]; colColor:string; done:boolean; countLabel:string; onUpload:()=>void };
-        const UploadCard = ({icon,iconBg,title,subtitle,cols,colColor,done,countLabel,onUpload}:UploadCardProps) => (
+        type UploadCardProps = { icon:React.ReactNode; iconBg:string; title:string; subtitle:string; cols:string[]; colColor:string; done:boolean; countLabel:string; onFile:(f:File)=>void; onTemplate:()=>void };
+        const UploadCard = ({icon,iconBg,title,subtitle,cols,colColor,done,countLabel,onFile,onTemplate}:UploadCardProps) => (
           <div className={`bg-white rounded-xl border shadow-sm p-4 ${done?"border-emerald-200":"border-gray-100"}`}>
             <div className="flex items-center gap-3 mb-3">
               <div className={`w-9 h-9 rounded-xl ${iconBg} flex items-center justify-center flex-shrink-0`}>{icon}</div>
@@ -11257,16 +11370,16 @@ function AdminRestaurants({}: PageProps) {
                 {cols.map(c=><span key={c} className={`text-[10px] ${colColor} px-2 py-0.5 rounded-full`}>{c}</span>)}
               </div>
             </div>
-            {done
-              ? <div className="flex items-center gap-2 text-emerald-700 text-xs font-semibold mb-3 bg-emerald-50 rounded-lg px-3 py-2"><CheckCircle2 size={13}/>{countLabel}</div>
-              : <div onClick={onUpload} className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-purple-300 hover:bg-purple-50/10 transition-all mb-3">
-                  <Upload size={18} className="text-gray-300 mx-auto mb-1"/>
-                  <p className="text-xs text-gray-400">{t("اضغط لرفع ملف Excel","Click to upload Excel")}</p>
-                </div>
-            }
+            {done && <div className="flex items-center gap-2 text-emerald-700 text-xs font-semibold mb-3 bg-emerald-50 rounded-lg px-3 py-2"><CheckCircle2 size={13}/>{countLabel}</div>}
+            <label className="block border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-purple-300 hover:bg-purple-50/10 transition-all mb-3">
+              <input type="file" accept=".xlsx,.csv,.txt" className="hidden"
+                onChange={e=>{ const f=e.target.files?.[0]; if(f) onFile(f); e.currentTarget.value=""; }}/>
+              <Upload size={18} className="text-gray-300 mx-auto mb-1"/>
+              <p className="text-xs text-gray-400">{done ? t("إعادة الرفع (Excel / CSV)","Re-upload (Excel / CSV)") : t("اضغط لرفع ملف Excel / CSV","Click to upload Excel / CSV")}</p>
+              <p className="text-[10px] text-gray-300 mt-0.5">{t("الحد الأقصى 2 ميجابايت","Max 2 MB")}</p>
+            </label>
             <div className="flex gap-2">
-              <Btn variant="primary" size="sm" className="flex-1 justify-center" onClick={onUpload}><Upload size={11}/> {t("رفع","Upload")}</Btn>
-              <Btn size="sm"><Download size={11}/> {t("نموذج","Template")}</Btn>
+              <Btn size="sm" className="flex-1 justify-center" onClick={onTemplate}><Download size={11}/> {t("تحميل النموذج","Download Template")}</Btn>
             </div>
           </div>
         );
@@ -11328,18 +11441,20 @@ function AdminRestaurants({}: PageProps) {
                 <UploadCard
                   icon={<TrendingUp size={16} className="text-purple-600"/>} iconBg="bg-purple-100"
                   title={t("أصناف المبيعات","Sales Items")} subtitle={t("قائمة المنتجات والأسعار","Products & prices list")}
-                  cols={t(["رمز الصنف","اسم الصنف","الفئة","وحدة البيع","السعر"],["Item Code","Item Name","Category","Unit","Price"])}
+                  cols={t(["رمز الصنف","اسم الصنف","التصنيف","وحدة البيع","السعر"],["Item Code","Item Name","Category","Unit","Price"])}
                   colColor="bg-purple-50 text-purple-700"
                   done={ups.sales} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"sales")}
+                  onFile={(f)=>doBrandUpload("sales-items","sales",f)}
+                  onTemplate={()=>templateMut.mutate({ type:"sales-items" })}
                 />
                 <UploadCard
                   icon={<Package size={16} className="text-orange-600"/>} iconBg="bg-orange-100"
                   title={t("مواد خام المشتريات","Purchase Raw Materials")} subtitle={t("أصناف المواد الخام","Raw material items")}
-                  cols={t(["رمز المادة","اسم المادة","الفئة","وحدة القياس","التكلفة"],["Material Code","Material Name","Category","Unit","Cost"])}
+                  cols={t(["رمز المادة","اسم المادة","التصنيف","وحدة القياس","التكلفة"],["Material Code","Material Name","Category","Unit","Cost"])}
                   colColor="bg-orange-50 text-orange-700"
                   done={ups.materials} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"materials")}
+                  onFile={(f)=>doBrandUpload("raw-materials","materials",f)}
+                  onTemplate={()=>templateMut.mutate({ type:"raw-materials" })}
                 />
                 <UploadCard
                   icon={<Truck size={16} className="text-teal-600"/>} iconBg="bg-teal-100"
@@ -11347,7 +11462,8 @@ function AdminRestaurants({}: PageProps) {
                   cols={t(["رقم المورد","اسم المورد","الفئة","جهة الاتصال","شروط الدفع"],["Supplier ID","Supplier Name","Category","Contact","Payment Terms"])}
                   colColor="bg-teal-50 text-teal-700"
                   done={ups.suppliers} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"suppliers")}
+                  onFile={(f)=>doBrandUpload("suppliers","suppliers",f)}
+                  onTemplate={()=>templateMut.mutate({ type:"suppliers" })}
                 />
               </div>
             </div>
@@ -11396,11 +11512,12 @@ function AdminRestaurants({}: PageProps) {
                         <p className="text-[10px] text-gray-400">{done?(dates[ri]||"—"):"—"}</p>
                       </div>
                       <div className="text-center flex items-center justify-center gap-1">
-                        <button onClick={()=>setRestEmp(rest.id)}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors flex items-center gap-1 ${done?"bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700":"bg-blue-600 text-white hover:bg-blue-700"}`}>
+                        <label className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors flex items-center gap-1 cursor-pointer ${done?"bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700":"bg-blue-600 text-white hover:bg-blue-700"}`}>
+                          <input type="file" accept=".xlsx,.csv,.txt" className="hidden"
+                            onChange={e=>{ const f=e.target.files?.[0]; if(f) doEmpUpload(rest.id,f); e.currentTarget.value=""; }}/>
                           <Upload size={10}/>{done?t("تحديث","Update"):t("رفع","Upload")}
-                        </button>
-                        <Btn size="sm"><Download size={10}/></Btn>
+                        </label>
+                        <Btn size="sm" onClick={()=>templateMut.mutate({ type:"employees" })}><Download size={10}/></Btn>
                       </div>
                     </div>
                   );
@@ -11515,11 +11632,13 @@ function AdminRestaurants({}: PageProps) {
             <p className="font-semibold text-purple-800 text-sm">{t("إضافة علامة تجارية جديدة","Add New Brand")}</p>
             <button onClick={()=>setShowAddBrand(false)}><X size={14} className="text-purple-400"/></button>
           </div>
-          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">{t("الشركة","Company")} <span className="text-red-500">*</span></label>
+          {/* حقل «الشركة» مخفي مؤقتاً — تُترك companyId فاضية فيُنشئ الباك اند شركة تلقائياً باسم العلامة.
+          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">{t("الشركة (اختياري)","Company (optional)")}</label>
             <select value={brandForm.companyId} onChange={e=>setBrandForm(f=>({...f,companyId:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">{t("اختر الشركة","Select company")}</option>
+              <option value="">{t("بدون شركة — تُنشأ تلقائياً باسم العلامة","No company — auto-created from the brand name")}</option>
               {companyOptions.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
             </select></div>
+          */}
           <div className="grid grid-cols-3 gap-3">
             <div><label className="text-xs text-gray-500 block mb-1">{t("اسم العلامة","Brand Name")}</label><input value={brandForm.name} onChange={e=>setBrandForm(f=>({...f,name:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("علامة جديدة","New brand")}/></div>
             <div><label className="text-xs text-gray-500 block mb-1">{t("المالك / المسؤول","Owner / Manager")}</label><input value={brandForm.owner} onChange={e=>setBrandForm(f=>({...f,owner:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("اسم المالك","Owner name")}/></div>
@@ -11533,7 +11652,7 @@ function AdminRestaurants({}: PageProps) {
           <div className="mt-3"><label className="text-xs text-gray-500 block mb-1">{t("بريد المالك (اختياري)","Owner Email (optional)")}</label>
             <input type="email" dir="ltr" value={brandForm.ownerEmail} onChange={e=>setBrandForm(f=>({...f,ownerEmail:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-right" placeholder="owner@example.com"/>
             <p className="text-[11px] text-gray-400 mt-1">{t("لو دخلت بريد المالك، هيتعمله حساب دخول وتتبعتله كلمة المرور على البريد.","If provided, a login account is created and the password is emailed to the owner.")}</p></div>
-          <div className="flex gap-2 mt-3"><Btn variant="primary" size="sm" disabled={!brandForm.name.trim()||!brandForm.companyId||createBrandMut.isPending} onClick={()=>{ if(!brandForm.name.trim()||!brandForm.companyId) return; createBrandMut.mutate({ name:brandForm.name, companyId:brandForm.companyId, owner:brandForm.owner||undefined, ownerEmail:brandForm.ownerEmail.trim()||undefined, plan:planKey(brandForm.plan) }, { onSuccess:()=>{ setShowAddBrand(false); setBrandForm({name:"",owner:"",ownerEmail:"",plan:"فضي",companyId:""}); } }); }}>✓ {t("حفظ","Save")}</Btn><Btn size="sm" onClick={()=>setShowAddBrand(false)}>{t("إلغاء","Cancel")}</Btn></div>
+          <div className="flex gap-2 mt-3"><Btn variant="primary" size="sm" disabled={!brandForm.name.trim()||createBrandMut.isPending} onClick={()=>{ if(!brandForm.name.trim()) return; const cid=brandForm.companyId.trim(); const email=brandForm.ownerEmail.trim(); createBrandMut.mutate({ name:brandForm.name, ...(cid?{companyId:cid}:{}), owner:brandForm.owner||undefined, ownerEmail:email||undefined, plan:planKey(brandForm.plan) } as any, { onSuccess:(data:any)=>{ setShowAddBrand(false); setBrandForm({name:"",owner:"",ownerEmail:"",plan:"فضي",companyId:""}); if(email && data && data.emailSent===false){ toast.error(t("تم إنشاء العلامة لكن تعذّر إرسال كلمة المرور للمالك على البريد — استخدم «إعادة تعيين كلمة المرور» لإعادة الإرسال.","Brand created, but the owner's password email failed to send — use “Reset password” to resend.")); } } }); }}>✓ {t("حفظ","Save")}</Btn><Btn size="sm" onClick={()=>setShowAddBrand(false)}>{t("إلغاء","Cancel")}</Btn></div>
         </div>
       )}
 
