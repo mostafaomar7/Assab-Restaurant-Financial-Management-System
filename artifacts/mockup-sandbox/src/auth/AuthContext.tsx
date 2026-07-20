@@ -20,6 +20,7 @@ import {
 import { getTokens, clearTokens } from "../api/tokens";
 import { clearEntrySelection } from "./entrySelection";
 import { disconnectEcho, getEcho } from "../api/echo";
+import { setProcurementPlatformScope } from "../api/queries/platform/procurement";
 import type {
   AppNotification,
   LoginResponse,
@@ -95,6 +96,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, []);
+
+  // A procurement manager with no company is a platform account and must read
+  // the cross-company surface; /company/me/procurement/* would 403 WRONG_TENANT.
+  // Keep the procurement base path in sync with whoever is signed in.
+  useEffect(() => {
+    setProcurementPlatformScope(user?.role === "procurement" && !user?.companyId);
+  }, [user]);
 
   // Listen for forced-logout signal from the axios 401 interceptor.
   useEffect(() => {

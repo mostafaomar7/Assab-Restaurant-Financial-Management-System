@@ -26,13 +26,29 @@ import {
   type PurchaseOrdersFilter,
 } from "../keys";
 
+// ─── Surface selection (platform vs company) ────────────────────────────────
+// A procurement manager with no company is a PLATFORM account: it sees orders
+// across every company at /procurement/*. One employed by a company keeps
+// /company/me/procurement/*, which answers "my company" and refuses a
+// companyless user with 403 WRONG_TENANT. Since round 4 a procurement account
+// created without a companyId is the default, so picking the wrong base breaks
+// every screen. AuthContext sets this from the signed-in user.
+let procurementPlatformScope = false;
+
+export function setProcurementPlatformScope(isPlatform: boolean): void {
+  procurementPlatformScope = isPlatform;
+}
+
+const procBase = () =>
+  procurementPlatformScope ? "/procurement" : "/company/me/procurement";
+
 // ─── Overview ───────────────────────────────────────────────────────────────
 export function useProcurementOverviewPlatform() {
   return useQuery({
     queryKey: queryKeys.platformProcurementOverview,
     queryFn: async () => {
       const res = await api.get<PlatformProcurementOverview>(
-        "/company/me/procurement/overview",
+        `${procBase()}/overview`,
       );
       return res.data;
     },
@@ -49,7 +65,7 @@ export function useProcurementOrdersPlatform(
     queryFn: async () => {
       const res = await api.get<
         Page<PlatformProcurementOrder> | PlatformProcurementOrder[]
-      >("/company/me/procurement/orders", { params: filter });
+      >(`${procBase()}/orders`, { params: filter });
       const d = res.data;
       return Array.isArray(d) ? d : (d.data ?? []);
     },
@@ -62,7 +78,7 @@ export function useProcurementOrderPlatform(id?: string) {
     enabled: Boolean(id),
     queryFn: async () => {
       const res = await api.get<PlatformProcurementOrder>(
-        `/company/me/procurement/orders/${id}`,
+        `${procBase()}/orders/${id}`,
       );
       return res.data;
     },
@@ -77,7 +93,7 @@ export function useApproveProcurementOrderPlatform() {
       ...body
     }: { id: string } & Record<string, unknown>) => {
       const res = await api.post<PlatformProcurementOrder>(
-        `/company/me/procurement/orders/${id}/approve`,
+        `${procBase()}/orders/${id}/approve`,
         body,
       );
       return res.data;
@@ -99,7 +115,7 @@ export function useBulkApproveProcurementOrdersPlatform() {
     // Contract 5.3 bulk: POST /company/me/procurement/orders/approve { orderIds?, branch?, supplier? }
     mutationFn: async (body: { orderIds?: string[]; branch?: string; supplier?: string }) => {
       const res = await api.post<{ approved: string[]; count: number }>(
-        "/company/me/procurement/orders/approve",
+        `${procBase()}/orders/approve`,
         body,
       );
       return res.data;
@@ -126,7 +142,7 @@ export function useRejectProcurementOrderPlatform() {
       notes?: string;
     }) => {
       const res = await api.post<PlatformProcurementOrder>(
-        `/company/me/procurement/orders/${id}/reject`,
+        `${procBase()}/orders/${id}/reject`,
         { reason, notes },
       );
       return res.data;
@@ -150,7 +166,7 @@ export function usePartialRejectProcurementOrderPlatform() {
       ...body
     }: { id: string } & Record<string, unknown>) => {
       const res = await api.post<PlatformProcurementOrder>(
-        `/company/me/procurement/orders/${id}/partial-reject`,
+        `${procBase()}/orders/${id}/partial-reject`,
         body,
       );
       return res.data;
@@ -168,7 +184,7 @@ export function useConsolidateProcurementOrdersPlatform() {
   return useMutation({
     mutationFn: async (body: Record<string, unknown>) => {
       const res = await api.post<unknown>(
-        "/company/me/procurement/orders/consolidate",
+        `${procBase()}/orders/consolidate`,
         body,
       );
       return res.data;
@@ -192,7 +208,7 @@ export function useSendProcurementOrderPlatform() {
       ...body
     }: { groupId: string } & Record<string, unknown>) => {
       const res = await api.post<unknown>(
-        `/company/me/procurement/orders/grouped/${groupId}/send`,
+        `${procBase()}/orders/grouped/${groupId}/send`,
         body,
       );
       return res.data;
@@ -216,7 +232,7 @@ export function useProcurementSuppliersPlatform() {
     queryFn: async () => {
       const res = await api.get<
         ProcurementSuppliersListResponse | PlatformProcurementSupplier[]
-      >("/company/me/procurement/suppliers");
+      >(`${procBase()}/suppliers`);
       const d = res.data;
       return Array.isArray(d)
         ? { data: d, meta: undefined }
@@ -231,7 +247,7 @@ export function useProcurementItemsPlatform() {
     queryFn: async () => {
       const res = await api.get<
         Page<PlatformProcurementItem> | PlatformProcurementItem[]
-      >("/company/me/procurement/items");
+      >(`${procBase()}/items`);
       const d = res.data;
       return Array.isArray(d) ? d : (d.data ?? []);
     },
@@ -245,7 +261,7 @@ export function useProcurementItemsPlatform() {
 // branch `asab-admin-backend`). Screens render safe empty states until then.
 // ════════════════════════════════════════════════════════════════════════════
 
-const PO_BASE = "/company/me/procurement/purchase-orders";
+const poBase = () => `${procBase()}/purchase-orders`;
 const invalidatePO = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ["platform", "procurement", "purchase-orders"] });
   qc.invalidateQueries({ queryKey: ["platform", "procurement", "overview"] });
@@ -260,7 +276,7 @@ export function usePurchaseOrders(
     queryKey: queryKeys.platformPurchaseOrders(filter),
     enabled: options.enabled ?? true,
     queryFn: async () => {
-      const res = await api.get<Page<PurchaseOrder>>(PO_BASE, { params: filter });
+      const res = await api.get<Page<PurchaseOrder>>(poBase(), { params: filter });
       const d = res.data as Page<PurchaseOrder> | PurchaseOrder[];
       // Normalise to a page shape even if the backend returns a bare array.
       if (Array.isArray(d)) {
@@ -280,7 +296,7 @@ export function usePurchaseOrder(
     queryKey: queryKeys.platformPurchaseOrder(id ?? ""),
     enabled: Boolean(id) && (options.enabled ?? true),
     queryFn: async () => {
-      const res = await api.get<PurchaseOrderDetail>(`${PO_BASE}/${id}`);
+      const res = await api.get<PurchaseOrderDetail>(`${poBase()}/${id}`);
       return res.data;
     },
   });
@@ -295,7 +311,7 @@ export function usePurchaseOrdersApprovedByMe(
     queryKey: queryKeys.platformPurchaseOrdersApprovedByMe(filter),
     enabled: options.enabled ?? true,
     queryFn: async () => {
-      const res = await api.get<Page<PurchaseOrder>>(`${PO_BASE}/approved-by-me`, {
+      const res = await api.get<Page<PurchaseOrder>>(`${poBase()}/approved-by-me`, {
         params: filter,
       });
       const d = res.data as Page<PurchaseOrder> | PurchaseOrder[];
@@ -311,7 +327,7 @@ export function useApprovePurchaseOrder() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      const res = await api.post<PurchaseOrder>(`${PO_BASE}/${id}/approve`);
+      const res = await api.post<PurchaseOrder>(`${poBase()}/${id}/approve`);
       return res.data;
     },
     onSuccess: () => {
@@ -335,7 +351,7 @@ export function usePartialApprovePurchaseOrder() {
       items: Array<{ orderItemId: string; quantity: number }>;
       note?: string;
     }) => {
-      const res = await api.post<PurchaseOrder>(`${PO_BASE}/${id}/partial-approve`, {
+      const res = await api.post<PurchaseOrder>(`${poBase()}/${id}/partial-approve`, {
         items,
         note,
       });
@@ -353,7 +369,7 @@ export function useRejectPurchaseOrder() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
-      const res = await api.post<PurchaseOrder>(`${PO_BASE}/${id}/reject`, { reason });
+      const res = await api.post<PurchaseOrder>(`${poBase()}/${id}/reject`, { reason });
       return res.data;
     },
     onSuccess: () => {
@@ -370,7 +386,7 @@ export function useBulkApprovePurchaseOrders() {
   return useMutation({
     mutationFn: async (orderIds: string[]) => {
       const res = await api.post<PurchaseOrderBulkApproveResult>(
-        `${PO_BASE}/bulk-approve`,
+        `${poBase()}/bulk-approve`,
         { orderIds },
       );
       return res.data;
@@ -398,7 +414,7 @@ export function useGroupedPurchaseOrders(
     queryKey: queryKeys.platformPurchaseOrdersGrouped(by),
     enabled: options.enabled ?? true,
     queryFn: async () => {
-      const res = await api.get<PurchaseOrderGroupedResponse>(`${PO_BASE}/grouped`, {
+      const res = await api.get<PurchaseOrderGroupedResponse>(`${poBase()}/grouped`, {
         params: { by },
       });
       return res.data;
@@ -419,7 +435,7 @@ export function useSendGroupedPurchaseOrders() {
       orderIds?: string[];
       expectedDeliveryDate?: string;
     }) => {
-      const res = await api.post<PurchaseOrderSendResult>(`${PO_BASE}/grouped/send`, {
+      const res = await api.post<PurchaseOrderSendResult>(`${poBase()}/grouped/send`, {
         supplierId,
         orderIds,
         expectedDeliveryDate,
@@ -445,7 +461,7 @@ export function useSentPurchaseOrders(options: { enabled?: boolean } = {}) {
     queryFn: async () => {
       const res = await api.get<
         Page<PurchaseOrderSentGroup> | PurchaseOrderSentGroup[]
-      >(`${PO_BASE}/sent`);
+      >(`${poBase()}/sent`);
       const d = res.data;
       return Array.isArray(d) ? d : (d.data ?? []);
     },
@@ -461,7 +477,7 @@ export function usePurchaseOrderGroup(
     queryKey: queryKeys.platformPurchaseOrderGroup(groupId ?? ""),
     enabled: Boolean(groupId) && (options.enabled ?? true),
     queryFn: async () => {
-      const res = await api.get<PurchaseOrderGroupDetail>(`${PO_BASE}/groups/${groupId}`);
+      const res = await api.get<PurchaseOrderGroupDetail>(`${poBase()}/groups/${groupId}`);
       return res.data;
     },
   });
