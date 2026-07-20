@@ -78,6 +78,7 @@ import { GlobalSearch } from "../../shared/GlobalSearch";
 import { ChangePasswordModal } from "../../../auth/ChangePasswordModal";
 import { useLanguagePref } from "../../../auth/useLanguagePref";
 import { readEntrySelection, clearEntrySelection } from "../../../auth/entrySelection";
+import { readAppLang, writeAppLang, type AppLang } from "../../../appLang";
 import { useAuth } from "../../../auth/AuthContext";
 import { NotificationPreferencesPage } from "../../shared/NotificationPreferencesPage";
 import { TwoFactorSetupWizard } from "../../shared/TwoFactorSetupWizard";
@@ -305,7 +306,9 @@ function CAssetDraftProvider({ children }:{ children:ReactNode }) {
 }
 
 function CLangProvider({ children }:{ children:ReactNode }) {
-  const [lang, setLang] = useState<CLang>("ar");
+  // Seed from the language picked on the pre-login entry screen; persist changes.
+  const [lang, setLangState] = useState<CLang>(() => readAppLang() as CLang);
+  const setLang = (l: CLang) => { setLangState(l); writeAppLang(l as AppLang); };
   const t   = (ar:string, en:string) => lang==="ar" ? ar : en;
   const dir = lang==="ar" ? "rtl" : "ltr";
   return (
@@ -6559,7 +6562,9 @@ function CompanyDashboardInner() {
   const navigate   = (p:string) => { setPage(p); tagHistory(p); };
   // Real sign-out: clear the pre-login pick + the auth session so the sidebar
   // "logout" returns to the entry flow, not the in-mockup role picker.
-  const logout     = () => { clearEntrySelection(); setRole(null); setPage(""); void authLogout(); };
+  // Don't clear role/page here — that flashes the in-mockup role picker while the
+  // async sign-out is in flight. App unmounts this view once `user` becomes null.
+  const logout     = () => { clearEntrySelection(); void authLogout(); };
 
   // Browser Back/Forward → restore the previous internal page (URL stays on the preview hash).
   useEffect(() => {

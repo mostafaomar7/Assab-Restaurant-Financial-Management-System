@@ -240,7 +240,9 @@ import { PermissionHistoryDrawer } from "../../shared/PermissionHistoryDrawer";
 import { LiveChatWidget } from "../../shared/LiveChatWidget";
 import { useLanguagePref } from "../../../auth/useLanguagePref";
 import { useAuth } from "../../../auth/AuthContext";
+import { toast } from "sonner";
 import { readEntrySelection, clearEntrySelection } from "../../../auth/entrySelection";
+import { readAppLang, writeAppLang, type AppLang } from "../../../appLang";
 import { SUPPLIER_PORTAL_ENABLED } from "../../../featureFlags";
 
 // ─────────────────────────────────────────────
@@ -250,10 +252,16 @@ interface AdminUserData {
   id?: string;
   name: string; email: string; phone: string; role: string;
   brands: string[]; restaurants: string[]; branches: string[];
-  modules: string[]; reportsTo: string;
+  // reportsTo: writes send the head's userId; reads come back as {id,name}.
+  modules: string[]; reportsTo: string | { id: string; name: string } | null;
+  companyId?: string;
   scope: "all" | "brand" | "restaurant" | "branch";
   status: "active" | "inactive";
 }
+
+/** reportsTo is a userId on write but an object on read — render the name safely. */
+const reportsToName = (v: unknown): string =>
+  typeof v === "string" ? v : ((v as { name?: string } | null)?.name ?? "");
 type RoleId = "admin" | "head" | "accountant" | "branch" | "procurement" | "supplier";
 type PageId = string;
 type OpStatus = "pending" | "approved" | "rejected" | "final-approved";
@@ -1280,6 +1288,19 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const isBranchManager   = role === "مدير فرع";
   const isChief           = role === "رئيس حسابات";
   const isMorrad          = role === "مورد";
+  const isProcurement     = role === "مدير مشتريات";
+  const isAdminRole       = role === "أدمن";
+  // Roles that carry no company/brand scope at all: platform supplier, platform
+  // procurement manager, and system admin (admin is forced to scope "all").
+  const isScopeless       = isMorrad || isProcurement || isAdminRole;
+  // reportsTo must be a real head's userId.
+  const { data: headsApi } = useAdminUsers({ roleFilter: "head" });
+  const headOptions = ((Array.isArray(headsApi) ? headsApi : (headsApi as any)?.data ?? []) as any[])
+    .map((h:any)=>({ id: h.id, name: h.name }));
+  // Branch managers need a company + exactly one branch (BRANCH_NOT_IN_COMPANY otherwise).
+  const { data: companiesApiU } = useAdminCompanies();
+  const companyOptionsU = (((companiesApiU as any)?.data ?? companiesApiU ?? []) as any[]);
+  const [companyId, setCompanyId] = useState("");
 
   // Brands/restaurants/branches come from the API (GET /admin/brands), not a static catalog.
   const { data: brandsApi } = useAdminBrands();
@@ -1317,7 +1338,15 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const steps_en = ["Basic Information","Assignment & Scope","Modules & Hierarchy"];
   const steps = en ? steps_en : steps_ar;
   const canNext0 = name.trim()!=="";
-  const canNext1 = isMorrad || selBrands.length>0;
+  // Per-role scope rules (backend-enforced):
+  //  • admin / procurement / supplier → no scope at all (admin is forced to "all")
+  //  • branch  → a company AND exactly one branch (else 422 BRANCH_NOT_IN_COMPANY)
+  //  • accountant / head → at least one brand
+  const canNext1 = isScopeless
+    ? true
+    : isBranchManager
+      ? Boolean(companyId) && selBranches.length === 1
+      : selBrands.length > 0;
 
   return (
     <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" dir={dir}>
@@ -1373,12 +1402,31 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
           </>}
 
           {step===1 && <>
-            {isMorrad
+            {isScopeless
               ? <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-700">
-                  <p className="font-semibold">{t("المورد لا يحتاج تخصيص مطاعم","Supplier does not require restaurant assignment")}</p>
-                  <p className="text-xs mt-1 text-amber-500">{t("يتعامل المورد مع طلبات التوريد المرسلة إليه مباشرةً من مدير المشتريات.","The supplier handles supply orders sent directly by the Procurement Manager.")}</p>
+                  <p className="font-semibold">
+                    {isAdminRole ? t("أدمن النظام بدون نطاق","System admin has no scope")
+                      : isProcurement ? t("مدير المشتريات حساب منصّة","Procurement manager is a platform account")
+                      : t("المورد حساب منصّة","Supplier is a platform account")}
+                  </p>
+                  <p className="text-xs mt-1 text-amber-500">
+                    {isAdminRole ? t("الأدمن يرى كل الشركات — لا يُخصَّص له علامات أو مطاعم أو فروع.","An admin sees every company — no brands, restaurants or branches are assigned.")
+                      : isProcurement ? t("لا يتبع شركة واحدة — يرى طلبات الشراء عبر كل الشركات.","Not tied to one company — sees purchase orders across all companies.")
+                      : t("لا يتبع شركة واحدة — يستقبل طلبات التوريد من كل الشركات.","Not tied to one company — receives supply orders from all companies.")}
+                  </p>
                 </div>
               : <>
+                {/* A branch manager provisions a mobile login, which fails closed
+                    without a company; the branch must belong to that company. */}
+                {isBranchManager && (
+                  <div>
+                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("الشركة","Company")} <span className="text-red-500">*</span></label>
+                    <select value={companyId} onChange={e=>{ setCompanyId(e.target.value); setSelBrands([]); setSelRests([]); setSelBranches([]); }} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+                      <option value="">{t("— اختر الشركة —","— Select company —")}</option>
+                      {companyOptionsU.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label className="text-xs font-semibold text-gray-600 block mb-2">{t("تخصيص العلامات التجارية","Assign Brands")} <span className="text-red-500">*</span></label>
                   <div className="grid grid-cols-2 gap-2">
@@ -1456,11 +1504,12 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
             {(role==="محاسب"||role==="مدير فرع") && (
               <div>
                 <label className="text-xs font-semibold text-gray-600 block mb-1">{t("يرفع تقاريره إلى","Reports To")}</label>
+                {/* Must submit the head's userId — a name is rejected with 422. */}
                 <select value={reportsTo} onChange={e=>setReportsTo(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
                   <option value="">{t("— اختر المسؤول المباشر —","— Select Direct Supervisor —")}</option>
-                  <option>{t("خالد العمري — رئيس حسابات","Khalid Al-Omari — Head Accountant")}</option>
-                  <option>{t("أحمد محمد الشهري — محاسب","Ahmed Al-Shehri — Accountant")}</option>
+                  {headOptions.map((h:any)=><option key={h.id} value={h.id}>{h.name}</option>)}
                 </select>
+                {headOptions.length===0 && <p className="text-[11px] text-gray-400 mt-1">{t("لا يوجد رؤساء حسابات بعد","No head accountants yet")}</p>}
               </div>
             )}
 
@@ -1488,7 +1537,14 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                 {en?"Next →":"التالي ←"}
               </button>
             : <button onClick={()=>{ if(!name.trim()) return;
-                onAdd({ name,email,phone,role,brands:selBrands,restaurants:selRests,branches:selBranches,modules:selModules,reportsTo,scope:scopeFor(),status:"active" });
+                onAdd({ name,email,phone,role,
+                  // Scopeless roles must send no scope at all — a stray array would
+                  // narrow an account that is meant to be unrestricted.
+                  brands:isScopeless?[]:selBrands,
+                  restaurants:isScopeless?[]:selRests,
+                  branches:isScopeless?[]:selBranches,
+                  modules:selModules, reportsTo, companyId: companyId || undefined,
+                  scope:isScopeless?"all":scopeFor(), status:"active" });
               }} className="px-6 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">
                 ✓ {t("إضافة المستخدم","Add User")}
               </button>
@@ -1701,7 +1757,22 @@ function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove
           onAdd={u=>{
             const roleKey = ({ "محاسب":"accountant","رئيس حسابات":"head","مدير فرع":"branch","مدير مشتريات":"procurement","مورد":"supplier","أدمن":"admin" } as Record<string,string>)[u.role] ?? u.role;
             setAdminUsers(prev=>[...prev,u]);
-            createAdminUserMut.mutate({ ...u, role: roleKey } as any);
+            // Drop empty scope arrays and `scope` itself — the backend derives scope,
+            // and `restaurants` is now `prohibited` on this endpoint (422).
+            const { restaurants: _r, scope: _s, ...rest } = u as any;
+            const body: any = { ...rest, role: roleKey };
+            if (!body.brands?.length)   delete body.brands;
+            if (!body.branches?.length) delete body.branches;
+            if (!body.companyId)        delete body.companyId;
+            if (!body.reportsTo)        delete body.reportsTo;
+            createAdminUserMut.mutate(body, {
+              onSuccess: (created:any)=>{
+                // Passwords are emailed by default now; false = the user got nothing.
+                if (created?.emailSent === false) {
+                  toast.warning("تم إنشاء المستخدم، لكن لم يصل بريد كلمة المرور — استخدم «إعادة تعيين كلمة المرور».");
+                }
+              },
+            });
             setModal(null);
           }}
           onClose={()=>setModal(null)}/>
@@ -10737,10 +10808,10 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                             </div>
                           </div>
                         </div>
-                        {u.reportsTo && (
+                        {reportsToName(u.reportsTo) && (
                           <div className="flex items-center gap-2 pt-2 border-t border-gray-200 text-xs text-gray-500">
                             <span className="font-semibold">{t("يرفع تقاريره إلى:","Reports to:")}</span>
-                            <span className="bg-white border border-gray-200 px-2 py-0.5 rounded-lg">{u.reportsTo}</span>
+                            <span className="bg-white border border-gray-200 px-2 py-0.5 rounded-lg">{reportsToName(u.reportsTo)}</span>
                           </div>
                         )}
                         <div className="flex gap-2 pt-2 border-t border-gray-200">
@@ -11412,9 +11483,11 @@ function AdminRestaurants({}: PageProps) {
             <p className="font-semibold text-purple-800 text-sm">{t("إضافة علامة تجارية جديدة","Add New Brand")}</p>
             <button onClick={()=>setShowAddBrand(false)}><X size={14} className="text-purple-400"/></button>
           </div>
-          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">{t("الشركة","Company")} <span className="text-red-500">*</span></label>
+          {/* companyId is OPTIONAL — omitting it makes the backend create a company
+              named after the brand and link it. Never send "" (→ 422). */}
+          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">{t("الشركة (اختياري)","Company (optional)")}</label>
             <select value={brandForm.companyId} onChange={e=>setBrandForm(f=>({...f,companyId:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">{t("اختر الشركة","Select company")}</option>
+              <option value="">{t("— إنشاء شركة تلقائياً باسم العلامة —","— Auto-create a company named after the brand —")}</option>
               {companyOptions.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
             </select></div>
           <div className="grid grid-cols-3 gap-3">
@@ -11430,7 +11503,24 @@ function AdminRestaurants({}: PageProps) {
           <div className="mt-3"><label className="text-xs text-gray-500 block mb-1">{t("بريد المالك (اختياري)","Owner Email (optional)")}</label>
             <input type="email" dir="ltr" value={brandForm.ownerEmail} onChange={e=>setBrandForm(f=>({...f,ownerEmail:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-right" placeholder="owner@example.com"/>
             <p className="text-[11px] text-gray-400 mt-1">{t("لو دخلت بريد المالك، هيتعمله حساب دخول وتتبعتله كلمة المرور على البريد.","If provided, a login account is created and the password is emailed to the owner.")}</p></div>
-          <div className="flex gap-2 mt-3"><Btn variant="primary" size="sm" disabled={!brandForm.name.trim()||!brandForm.companyId||createBrandMut.isPending} onClick={()=>{ if(!brandForm.name.trim()||!brandForm.companyId) return; createBrandMut.mutate({ name:brandForm.name, companyId:brandForm.companyId, owner:brandForm.owner||undefined, ownerEmail:brandForm.ownerEmail.trim()||undefined, plan:planKey(brandForm.plan) }, { onSuccess:()=>{ setShowAddBrand(false); setBrandForm({name:"",owner:"",ownerEmail:"",plan:"فضي",companyId:""}); } }); }}>✓ {t("حفظ","Save")}</Btn><Btn size="sm" onClick={()=>setShowAddBrand(false)}>{t("إلغاء","Cancel")}</Btn></div>
+          <div className="flex gap-2 mt-3"><Btn variant="primary" size="sm" disabled={!brandForm.name.trim()||createBrandMut.isPending} onClick={()=>{
+            if(!brandForm.name.trim()) return;
+            createBrandMut.mutate({
+              name:brandForm.name,
+              // Omit the key entirely when unset — sending "" is a 422.
+              ...(brandForm.companyId ? { companyId: brandForm.companyId } : {}),
+              owner:brandForm.owner||undefined,
+              ownerEmail:brandForm.ownerEmail.trim()||undefined,
+              plan:planKey(brandForm.plan),
+            } as any, { onSuccess:(created:any)=>{
+              setShowAddBrand(false);
+              setBrandForm({name:"",owner:"",ownerEmail:"",plan:"فضي",companyId:""});
+              // emailSent is meaningful now: false = the owner never got a password.
+              if (brandForm.ownerEmail.trim() && created?.emailSent === false) {
+                toast.warning(t("تم إنشاء العلامة، لكن لم يصل بريد كلمة المرور للمالك — استخدم «إعادة تعيين كلمة المرور».","Brand created, but the owner's password email failed — use “Reset password”."));
+              }
+            } });
+          }}>✓ {t("حفظ","Save")}</Btn><Btn size="sm" onClick={()=>setShowAddBrand(false)}>{t("إلغاء","Cancel")}</Btn></div>
         </div>
       )}
 
@@ -11666,23 +11756,35 @@ function AdminSubscriptions({}: PageProps) {
   const [autoReminders, setAutoReminders] = useState<Record<string,boolean>>({});
   useEffect(() => {
     if (!Array.isArray(apiSubs)) return;
-    const mapped: SubCard[] = apiSubs.map((s:any)=>({
-      id: s.id,
-      name: s.brandName ?? s.name ?? "—",
-      abbr: (s.brandName ?? s.name ?? "؟").toString().slice(0,2),
-      color: s.color ?? "#7C3AED",
-      owner: s.owner ?? s.ownerEmail ?? "",
-      plan: s.plan,
-      subStatus: (s.status ?? "active") as SubCard["subStatus"],
-      expires: s.expiresAt ?? "",
-      daysLeft: s.daysLeft ?? 0,
-      monthlyPrice: s.monthlyPrice,
-      restaurants: Array.isArray(s.restaurants) ? s.restaurants : [],
-      modules: Array.isArray(s.modules) ? s.modules : [],
-    }));
+    // GET /admin/subscriptions returns brand-level rows carrying only
+    // {id, brandId, plan, status, expiresAt, ...}. The brand's identity, its
+    // restaurants→branches tree and its modules live on GET /admin/brands, so we
+    // join on brandId — otherwise the card renders «—», «0 فرع» and no modules.
+    const brandList = (Array.isArray(subBrandsApi) ? subBrandsApi : []) as any[];
+    const brandById = new Map(brandList.map((b:any)=>[b.id, b]));
+    const mapped: SubCard[] = apiSubs.map((s:any)=>{
+      const b = (s.brandId ? brandById.get(s.brandId) : undefined) ?? {};
+      const name = s.brandName ?? s.name ?? b.name ?? "—";
+      const rests = (Array.isArray(s.restaurants) && s.restaurants.length ? s.restaurants : b.restaurants) ?? [];
+      const mods  = (Array.isArray(s.modules) && s.modules.length ? s.modules : b.modules) ?? [];
+      return {
+        id: s.id,
+        name,
+        abbr: (b.abbr ?? name ?? "؟").toString().slice(0,2),
+        color: s.color ?? b.color ?? "#7C3AED",
+        owner: s.owner ?? s.ownerEmail ?? b.owner ?? b.ownerEmail ?? "",
+        plan: s.plan ?? b.plan ?? "",
+        subStatus: (s.status ?? "active") as SubCard["subStatus"],
+        expires: s.expiresAt ?? "",
+        daysLeft: s.daysLeft ?? 0,
+        monthlyPrice: s.monthlyPrice,
+        restaurants: rests,
+        modules: mods,
+      };
+    });
     setSubs(mapped);
     setAutoReminders(Object.fromEntries(apiSubs.map((s:any)=>[s.id, !!s.reminderEnabled])));
-  }, [apiSubs]);
+  }, [apiSubs, subBrandsApi]);
   const statusCls = { active:"border-emerald-200 bg-emerald-50/20",warning:"border-amber-200 bg-amber-50/20",danger:"border-red-200 bg-red-50/20",expired:"border-red-300 bg-red-50/30" };
   const statusBadgeCls = { active:"bg-emerald-50 text-emerald-700",warning:"bg-amber-50 text-amber-700",danger:"bg-red-50 text-red-700",expired:"bg-red-100 text-red-800" };
   const statusLabel = { active:t("اشتراك نشط","Active Subscription"),warning:t("ينتهي قريباً","Expiring Soon"),danger:t("إنذار انتهاء","Expiry Alert"),expired:t("منتهي الاشتراك","Subscription Expired") };
@@ -15008,7 +15110,10 @@ function SupReports({}: PageProps) {
 // MAIN EXPORT
 // ════════════════════════════════════════════════════════════
 export function ASABPrototype() {
-  const [lang, setLang] = useState<Lang>("ar");
+  // Seed from the language picked on the pre-login entry screen, and persist any
+  // in-app change so it survives navigation/reload.
+  const [lang, setLangState] = useState<Lang>(() => readAppLang() as Lang);
+  const setLang = (l: Lang) => { setLangState(l); writeAppLang(l as AppLang); };
   const t = <T,>(ar: T, en: T): T => lang === "ar" ? ar : en;
   const dir = lang === "ar" ? "rtl" : "ltr";
 
@@ -15054,8 +15159,11 @@ export function ASABPrototype() {
   // Full sign-out: clear the pre-login entry selection + the auth session so the user returns
   // to the entry flow (dashboard → role → login), not the in-mockup role picker.
   const logout = () => {
+    // Do NOT reset appState here: clearing `role` re-renders the in-mockup role
+    // picker for the moment the async sign-out is in flight, which reads as the
+    // "old screen" flashing before App swaps in the entry flow. Once authLogout
+    // resolves, `user` becomes null and App unmounts this mockup entirely.
     clearEntrySelection();
-    setAppState({ role:null, page:"", detailId:null, modal:null });
     void authLogout();
   };
   // Open directly on the role picked in the pre-login entry flow (once per mount). After an

@@ -603,12 +603,21 @@ export function useCreateAdminUser() {
       restaurants?: string[];
       branches?: string[];
       modules?: string[];
+      // Must be the head's userId — a display name is rejected with 422.
       reportsTo?: string;
+      // Required in practice for role "branch" (provisions the mobile login);
+      // must be omitted for platform supplier / procurement accounts.
+      companyId?: string;
+      // Only for a company-scoped supplier; omit for a platform supplier.
+      supplierId?: string;
       scope?: "all" | "brand" | "restaurant" | "branch";
       status?: "active" | "inactive";
       sendLoginEmail?: boolean;
     }) => {
-      const res = await api.post<AdminUserRow>("/admin/users", body);
+      const res = await api.post<AdminUserRow & { emailSent?: boolean }>(
+        "/admin/users",
+        body,
+      );
       return res.data;
     },
     onSuccess: () => {

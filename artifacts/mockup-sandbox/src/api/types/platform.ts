@@ -43,7 +43,11 @@ export interface AdminUserRow {
   restaurants?: string[];
   branches?: string[];
   modules?: string[];
-  reportsTo?: string;
+  // BREAKING (2026-07-17): reads return an object; writes must send the head's
+  // userId as a plain string. Keep both shapes so list + form can share the type.
+  reportsTo?: string | { id: string; name: string } | null;
+  companyId?: string | null;
+  supplierId?: string | null;
   scope?: "all" | "brand" | "restaurant" | "branch";
   status: "active" | "inactive";
   createdAt?: string;
