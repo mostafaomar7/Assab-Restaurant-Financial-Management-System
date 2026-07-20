@@ -5,13 +5,16 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, downloadBlob, type Page } from "../../client";
-import { getErrorMessage } from "../../errors";
+import { ApiError, getErrorMessage } from "../../errors";
 import type {
   AdminAuditLogEntry,
   AdminBrand,
   AdminBranch,
+  AdminBranchUploadStatus,
   AdminBrandUploadStatus,
   AdminBrandUploadType,
+  AdminRestaurantUploadStatus,
+  AdminUploadResult,
   AdminCompany,
   AdminDistribution,
   AdminPermission,
@@ -1358,26 +1361,60 @@ export function useCreateAdminSubscription() {
 }
 
 // ─── Bulk uploads (multipart) ────────────────────────────────────────────────
+
+/** Server cap is 2 MB and `.xlsx|.xls|.csv|.txt`; fail fast instead of round-tripping a 422. */
+export const ADMIN_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+const ADMIN_UPLOAD_EXTS = [".xlsx", ".xls", ".csv", ".txt"];
+
+export function assertUploadFile(file: File): void {
+  const name = (file.name ?? "").toLowerCase();
+  if (!ADMIN_UPLOAD_EXTS.some((e) => name.endsWith(e))) {
+    throw new ApiError(
+      {
+        error: {
+          code: "INVALID_INPUT",
+          message: "Unsupported file type",
+          messageAr: "صيغة الملف غير مدعومة — استخدم xlsx أو xls أو csv",
+        },
+      },
+      422,
+    );
+  }
+  if (file.size > ADMIN_UPLOAD_MAX_BYTES) {
+    throw new ApiError(
+      {
+        error: {
+          code: "INVALID_INPUT",
+          message: "File too large",
+          messageAr: "حجم الملف أكبر من 2 ميجابايت",
+        },
+      },
+      422,
+    );
+  }
+}
+
 export function useAdminUploadBrand() {
   const qc = useQueryClient();
   return useMutation({
+    // `fixed-assets` is now a valid brand-level upload (lands with branch_id null).
     mutationFn: async ({
       brandId,
       type,
       file,
     }: {
       brandId: string;
-      type: Exclude<AdminBrandUploadType, "employees" | "fixed-assets">;
+      type: Exclude<AdminBrandUploadType, "employees">;
       file: File;
     }) => {
+      assertUploadFile(file);
       const fd = new FormData();
       fd.append("file", file);
-      const res = await api.post<{
-        uploadedCount: number;
-        errors?: Array<{ row: number; message: string }>;
-      }>(`/admin/brands/${brandId}/upload/${type}`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const res = await api.post<AdminUploadResult>(
+        `/admin/brands/${brandId}/upload/${type}`,
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
       return res.data;
     },
     onSuccess: (_data, vars) => {
@@ -1400,19 +1437,23 @@ export function useAdminUploadEmployees() {
       restaurantId: string;
       file: File;
     }) => {
+      assertUploadFile(file);
       const fd = new FormData();
       fd.append("file", file);
-      const res = await api.post<{
-        uploadedCount?: number;
-        errors?: Array<{ row: number; message: string }>;
-      }>(`/admin/restaurants/${restaurantId}/upload/employees`, fd, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      // Per restaurant, not per brand — each restaurant keeps its own roster.
+      const res = await api.post<AdminUploadResult>(
+        `/admin/restaurants/${restaurantId}/upload/employees`,
+        fd,
+        { headers: { "Content-Type": "multipart/form-data" } },
+      );
       return res.data;
     },
-    onSuccess: () => {
+    // Refresh the restaurant's own status too, else the «حالة الرفع» column and
+    // the brand summary keep showing the pre-upload state.
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
       qc.invalidateQueries({
-        queryKey: ["platform", "admin", "brands"],
+        queryKey: ["platform", "admin", "restaurants", vars.restaurantId, "upload-status"],
       });
       toast.success("تم رفع الموظفين");
     },
@@ -1430,19 +1471,21 @@ export function useAdminUploadFixedAssets() {
       branchId: string;
       file: File;
     }) => {
+      assertUploadFile(file);
       const fd = new FormData();
       fd.append("file", file);
-      const res = await api.post<{
-        assetCount: number;
-        branchGroups?: Record<string, number>;
-        notifications?: number;
-      }>(`/admin/branches/${branchId}/upload/fixed-assets`, fd, {
+      const res = await api.post<
+        AdminUploadResult & { branchGroups?: Record<string, number>; notifications?: number }
+      >(`/admin/branches/${branchId}/upload/fixed-assets`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: ["platform", "admin", "branches"] });
+      qc.invalidateQueries({
+        queryKey: ["platform", "admin", "branches", vars.branchId, "upload-status"],
+      });
       toast.success("تم رفع الأصول الثابتة");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -1474,6 +1517,37 @@ export function useAdminBrandUploadStatus(brandId: string | null | undefined) {
     queryFn: async () => {
       const res = await api.get<AdminBrandUploadStatus>(
         `/admin/brands/${brandId}/upload-status`,
+      );
+      return res.data;
+    },
+  });
+}
+
+// The branch-level status endpoint was missing entirely, so a per-branch
+// fixed-assets upload was written but unreadable — the column could never
+// leave «لم يُرفع». Now published.
+export function useAdminBranchUploadStatus(branchId: string | null | undefined) {
+  return useQuery({
+    queryKey: ["platform", "admin", "branches", branchId ?? "", "upload-status"],
+    enabled: Boolean(branchId),
+    queryFn: async () => {
+      const res = await api.get<AdminBranchUploadStatus>(
+        `/admin/branches/${branchId}/upload-status`,
+      );
+      return res.data;
+    },
+  });
+}
+
+export function useAdminRestaurantUploadStatus(
+  restaurantId: string | null | undefined,
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "restaurants", restaurantId ?? "", "upload-status"],
+    enabled: Boolean(restaurantId),
+    queryFn: async () => {
+      const res = await api.get<AdminRestaurantUploadStatus>(
+        `/admin/restaurants/${restaurantId}/upload-status`,
       );
       return res.data;
     },

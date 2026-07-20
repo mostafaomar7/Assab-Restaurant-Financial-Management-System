@@ -96,6 +96,7 @@ import {
   useAdminUploadEmployees,
   useAdminUploadFixedAssets,
   useAdminUploadTemplate,
+  useAdminBrandUploadStatus,
   useExportOperations,
   useExportHeadOperations,
   useExportAssets,
@@ -11137,6 +11138,30 @@ function AdminRestaurants({}: PageProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [brandsApi]);
 
+  // ── Real upload wiring (the tab was entirely local booleans before) ──────────
+  const uploadBrandMut  = useAdminUploadBrand();
+  const uploadEmpMut    = useAdminUploadEmployees();
+  const uploadAssetsMut = useAdminUploadFixedAssets();
+  const templateMut     = useAdminUploadTemplate();
+  const { data: brandUploadStatus } = useAdminBrandUploadStatus(uploadBrand);
+  // Last failure per card key, so INVALID_HEADER can show expected vs received.
+  const [uploadErrors, setUploadErrors] = useState<Record<string, any>>({});
+  const noteUploadError = (key:string, e:unknown) => {
+    const err = e as { code?:string; messageAr?:string; details?:any };
+    setUploadErrors(p=>({ ...p, [key]: {
+      code: err?.code, messageAr: err?.messageAr,
+      expected: err?.details?.expected, received: err?.details?.received,
+      rows: undefined,
+    }}));
+  };
+  const clearUploadError = (key:string) => setUploadErrors(p=>{ const n={...p}; delete n[key]; return n; });
+  // A partial import is normal — surface per-row errors after a 200.
+  const noteRowErrors = (key:string, res:any) => {
+    const rows = res?.errors ?? [];
+    if (rows.length) setUploadErrors(p=>({ ...p, [key]: { code:"ROW_ERRORS", rows } }));
+    else clearUploadError(key);
+  };
+
   // Per-restaurant subscription state
   type RestSub = { plan:"فضي"|"ذهبي"|"بلاتيني"; status:"active"|"warning"|"danger"|"expired"; expires:string; daysLeft:number; price:number };
   const [restSubs, setRestSubs] = useState<Record<string,RestSub>>({
@@ -11202,14 +11227,49 @@ function AdminRestaurants({}: PageProps) {
           );
         }
         const ups = brandUploads[uploadBrand] ?? { sales:false, materials:false, employees:false, suppliers:false };
+        // Authoritative completion comes from GET /admin/brands/{id}/upload-status.
+        // `shared.*` now requires a SUCCESSFUL upload, so a failed one no longer
+        // counts toward «مكتمل» — the counter is finally truthful.
+        const apiShared = (brandUploadStatus as any)?.shared ?? {};
+        const sharedDone = {
+          sales:       apiShared.sales       ?? ups.sales,
+          materials:   apiShared.materials   ?? ups.materials,
+          suppliers:   apiShared.suppliers   ?? ups.suppliers,
+          fixedAssets: apiShared.fixedAssets ?? false,
+        };
+        const apiCompletionPct = (brandUploadStatus as any)?.completionPct as number | undefined;
 
         // per-restaurant employee upload state
         const empKey = (rid:string) => `${uploadBrand}_${rid}`;
         const restEmpDone = (rid:string) => brandUploads[empKey(rid)]?.employees ?? false;
         const setRestEmp  = (rid:string) => setUploaded(empKey(rid),"employees");
 
-        type UploadCardProps = { icon:React.ReactNode; iconBg:string; title:string; subtitle:string; cols:string[]; colColor:string; done:boolean; countLabel:string; onUpload:()=>void };
-        const UploadCard = ({icon,iconBg,title,subtitle,cols,colColor,done,countLabel,onUpload}:UploadCardProps) => (
+        // Renders EMPTY_FILE / INVALID_HEADER (expected vs received) and per-row errors.
+        const UploadErrorBox = ({ err }:{ err:any }) => {
+          if (!err) return null;
+          if (err.code === "ROW_ERRORS") return (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 mb-3 space-y-1">
+              <p className="text-[11px] font-bold text-amber-800">{t("تم الاستيراد جزئياً — صفوف بها أخطاء:","Partially imported — rows with errors:")}</p>
+              {err.rows.slice(0,5).map((r:any,i:number)=><p key={i} className="text-[10px] text-amber-700">{t("صف","Row")} {r.row}: {r.message}</p>)}
+              {err.rows.length>5 && <p className="text-[10px] text-amber-500">+{err.rows.length-5}</p>}
+            </div>
+          );
+          return (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-2.5 mb-3 space-y-1">
+              <p className="text-[11px] font-bold text-red-800">{err.messageAr ?? t("فشل الرفع","Upload failed")}</p>
+              {err.code === "INVALID_HEADER" && (
+                <div className="space-y-1 pt-1">
+                  <p className="text-[10px] text-red-700">{t("الأعمدة المتوقعة:","Expected columns:")} <span className="font-mono">{(Array.isArray(err.expected?.[0]) ? err.expected[0] : err.expected ?? []).join(" · ")}</span></p>
+                  <p className="text-[10px] text-red-600">{t("الأعمدة المستلمة:","Received:")} <span className="font-mono">{(err.received ?? []).join(" · ")}</span></p>
+                </div>
+              )}
+            </div>
+          );
+        };
+
+        type UploadType = "sales-items"|"raw-materials"|"suppliers"|"employees"|"fixed-assets";
+        type UploadCardProps = { icon:React.ReactNode; iconBg:string; title:string; subtitle:string; cols:string[]; colColor:string; done:boolean; countLabel:string; busy?:boolean; err?:any; templateType:UploadType; onUpload:(f:File)=>void };
+        const UploadCard = ({icon,iconBg,title,subtitle,cols,colColor,done,countLabel,busy,err,templateType,onUpload}:UploadCardProps) => (
           <div className={`bg-white rounded-xl border shadow-sm p-4 ${done?"border-emerald-200":"border-gray-100"}`}>
             <div className="flex items-center gap-3 mb-3">
               <div className={`w-9 h-9 rounded-xl ${iconBg} flex items-center justify-center flex-shrink-0`}>{icon}</div>
@@ -11225,16 +11285,24 @@ function AdminRestaurants({}: PageProps) {
                 {cols.map(c=><span key={c} className={`text-[10px] ${colColor} px-2 py-0.5 rounded-full`}>{c}</span>)}
               </div>
             </div>
+            <UploadErrorBox err={err}/>
             {done
               ? <div className="flex items-center gap-2 text-emerald-700 text-xs font-semibold mb-3 bg-emerald-50 rounded-lg px-3 py-2"><CheckCircle2 size={13}/>{countLabel}</div>
-              : <div onClick={onUpload} className="border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-purple-300 hover:bg-purple-50/10 transition-all mb-3">
+              : <label className="block border-2 border-dashed border-gray-200 rounded-xl p-4 text-center cursor-pointer hover:border-purple-300 hover:bg-purple-50/10 transition-all mb-3">
+                  <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={busy}
+                    onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) onUpload(f); }}/>
                   <Upload size={18} className="text-gray-300 mx-auto mb-1"/>
-                  <p className="text-xs text-gray-400">{t("اضغط لرفع ملف Excel","Click to upload Excel")}</p>
-                </div>
+                  <p className="text-xs text-gray-400">{busy?t("جارٍ الرفع…","Uploading…"):t("اضغط لرفع ملف Excel","Click to upload Excel")}</p>
+                  <p className="text-[10px] text-gray-300 mt-0.5">{t("حتى 2 ميجابايت","Max 2 MB")}</p>
+                </label>
             }
             <div className="flex gap-2">
-              <Btn variant="primary" size="sm" className="flex-1 justify-center" onClick={onUpload}><Upload size={11}/> {t("رفع","Upload")}</Btn>
-              <Btn size="sm"><Download size={11}/> {t("نموذج","Template")}</Btn>
+              <label className={`flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${busy?"bg-purple-300 text-white":"bg-purple-600 text-white hover:bg-purple-700"}`}>
+                <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={busy}
+                  onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) onUpload(f); }}/>
+                <Upload size={11}/> {busy?t("جارٍ…","…"):t("رفع","Upload")}
+              </label>
+              <Btn size="sm" onClick={()=>templateMut.mutate({ type: templateType })}><Download size={11}/> {t("نموذج","Template")}</Btn>
             </div>
           </div>
         );
@@ -11293,29 +11361,34 @@ function AdminRestaurants({}: PageProps) {
                 </div>
               </div>
               <div className="grid grid-cols-3 gap-4">
+                {/* Column hints mirror the shipped templates: items and raw
+                    materials use «التصنيف»; suppliers genuinely uses «الفئة». */}
                 <UploadCard
                   icon={<TrendingUp size={16} className="text-purple-600"/>} iconBg="bg-purple-100"
                   title={t("أصناف المبيعات","Sales Items")} subtitle={t("قائمة المنتجات والأسعار","Products & prices list")}
-                  cols={t(["رمز الصنف","اسم الصنف","الفئة","وحدة البيع","السعر"],["Item Code","Item Name","Category","Unit","Price"])}
+                  cols={t(["رمز الصنف","اسم الصنف","التصنيف","وحدة البيع","السعر"],["Item Code","Item Name","Category","Unit","Price"])}
                   colColor="bg-purple-50 text-purple-700"
-                  done={ups.sales} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"sales")}
+                  done={sharedDone.sales} countLabel={t("تم الرفع ✓","Uploaded ✓")}
+                  busy={uploadBrandMut.isPending} err={uploadErrors["sales-items"]} templateType="sales-items"
+                  onUpload={(file)=>{ clearUploadError("sales-items"); uploadBrandMut.mutate({ brandId:uploadBrand, type:"sales-items", file }, { onSuccess:(r)=>noteRowErrors("sales-items",r), onError:(e)=>noteUploadError("sales-items",e) }); }}
                 />
                 <UploadCard
                   icon={<Package size={16} className="text-orange-600"/>} iconBg="bg-orange-100"
                   title={t("مواد خام المشتريات","Purchase Raw Materials")} subtitle={t("أصناف المواد الخام","Raw material items")}
-                  cols={t(["رمز المادة","اسم المادة","الفئة","وحدة القياس","التكلفة"],["Material Code","Material Name","Category","Unit","Cost"])}
+                  cols={t(["رمز المادة","اسم المادة","التصنيف","وحدة القياس","التكلفة"],["Material Code","Material Name","Category","Unit","Cost"])}
                   colColor="bg-orange-50 text-orange-700"
-                  done={ups.materials} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"materials")}
+                  done={sharedDone.materials} countLabel={t("تم الرفع ✓","Uploaded ✓")}
+                  busy={uploadBrandMut.isPending} err={uploadErrors["raw-materials"]} templateType="raw-materials"
+                  onUpload={(file)=>{ clearUploadError("raw-materials"); uploadBrandMut.mutate({ brandId:uploadBrand, type:"raw-materials", file }, { onSuccess:(r)=>noteRowErrors("raw-materials",r), onError:(e)=>noteUploadError("raw-materials",e) }); }}
                 />
                 <UploadCard
                   icon={<Truck size={16} className="text-teal-600"/>} iconBg="bg-teal-100"
                   title={t("الموردون","Suppliers")} subtitle={t("قائمة موردي العلامة التجارية","Brand suppliers list")}
                   cols={t(["رقم المورد","اسم المورد","الفئة","جهة الاتصال","شروط الدفع"],["Supplier ID","Supplier Name","Category","Contact","Payment Terms"])}
                   colColor="bg-teal-50 text-teal-700"
-                  done={ups.suppliers} countLabel={t("تم الرفع ✓","Uploaded ✓")}
-                  onUpload={()=>setUploaded(uploadBrand,"suppliers")}
+                  done={sharedDone.suppliers} countLabel={t("تم الرفع ✓","Uploaded ✓")}
+                  busy={uploadBrandMut.isPending} err={uploadErrors["suppliers"]} templateType="suppliers"
+                  onUpload={(file)=>{ clearUploadError("suppliers"); uploadBrandMut.mutate({ brandId:uploadBrand, type:"suppliers", file }, { onSuccess:(r)=>noteRowErrors("suppliers",r), onError:(e)=>noteUploadError("suppliers",e) }); }}
                 />
               </div>
             </div>
@@ -11342,11 +11415,13 @@ function AdminRestaurants({}: PageProps) {
                   <p className="text-[10px] font-bold text-gray-500 text-center">{t("آخر تحديث","Last Updated")}</p>
                   <p className="text-[10px] font-bold text-gray-500 text-center">{t("إجراء","Action")}</p>
                 </div>
-                {selBrand.restaurants.filter(r=>!uploadRestFilter||r.name.includes(uploadRestFilter)).map((rest,ri)=>{
+                {selBrand.restaurants.filter(r=>!uploadRestFilter||r.name.includes(uploadRestFilter)).map((rest)=>{
                   const done = restEmpDone(rest.id);
-                  const dates = ["14 مارس 2026","1 مارس 2026","20 فبراير 2026","5 فبراير 2026","28 يناير 2026"];
+                  const errKey = `emp_${rest.id}`;
+                  const err = uploadErrors[errKey];
                   return (
-                    <div key={rest.id} className="grid grid-cols-5 gap-0 items-center px-4 py-3 border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                    <div key={rest.id} className="border-b border-gray-50 last:border-0">
+                    <div className="grid grid-cols-5 gap-0 items-center px-4 py-3 hover:bg-gray-50/50">
                       <div className="col-span-2 flex items-center gap-2.5">
                         <div className="w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0" style={{background:selBrand.color+"cc"}}>{rest.name[0]}</div>
                         <div>
@@ -11361,15 +11436,21 @@ function AdminRestaurants({}: PageProps) {
                         }
                       </div>
                       <div className="text-center">
-                        <p className="text-[10px] text-gray-400">{done?(dates[ri]||"—"):"—"}</p>
+                        {/* No lastUploadedAt on this payload yet — don't invent a date. */}
+                        <p className="text-[10px] text-gray-400">—</p>
                       </div>
                       <div className="text-center flex items-center justify-center gap-1">
-                        <button onClick={()=>setRestEmp(rest.id)}
-                          className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors flex items-center gap-1 ${done?"bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700":"bg-blue-600 text-white hover:bg-blue-700"}`}>
+                        {/* Employees upload is per RESTAURANT — each keeps its own roster. */}
+                        <label className={`px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors inline-flex items-center gap-1 cursor-pointer ${done?"bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700":"bg-blue-600 text-white hover:bg-blue-700"}`}>
+                          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={uploadEmpMut.isPending}
+                            onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(!f) return; clearUploadError(errKey);
+                              uploadEmpMut.mutate({ restaurantId: rest.id, file: f }, { onSuccess:(r)=>{ noteRowErrors(errKey,r); setRestEmp(rest.id); }, onError:(er)=>noteUploadError(errKey,er) }); }}/>
                           <Upload size={10}/>{done?t("تحديث","Update"):t("رفع","Upload")}
-                        </button>
-                        <Btn size="sm"><Download size={10}/></Btn>
+                        </label>
+                        <Btn size="sm" onClick={()=>templateMut.mutate({ type:"employees" })}><Download size={10}/></Btn>
                       </div>
+                    </div>
+                    {err && <div className="px-4 pb-3"><UploadErrorBox err={err}/></div>}
                     </div>
                   );
                 })}
@@ -11397,11 +11478,17 @@ function AdminRestaurants({}: PageProps) {
                   <p className="text-[10px] font-bold text-gray-500 text-center">{t("إجراء","Action")}</p>
                 </div>
                 {selBrand.restaurants.filter(r=>!uploadRestFilter||r.name.includes(uploadRestFilter)).flatMap(rest=>
-                  rest.branches.map((br,bi)=>{
-                    const aKey = `${uploadBrand}_${rest.id}_${bi}`;
+                  rest.branches.map((br:any,bi:number)=>{
+                    // Keyed by the real branch id — the endpoint needs it, and the
+                    // old index-based key broke as soon as branches reordered.
+                    const branchId = typeof br === "string" ? "" : (br?.id ?? "");
+                    const aKey = branchId || `${uploadBrand}_${rest.id}_${bi}`;
                     const done = branchAssets[aKey]??false;
+                    const errKey = `asset_${aKey}`;
                     return (
-                      <div key={aKey} className="grid grid-cols-6 gap-0 items-center px-4 py-2.5 border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
+                      <div key={aKey} className="border-b border-gray-50 last:border-0">
+                      {uploadErrors[errKey] && <div className="px-4 pt-2"><UploadErrorBox err={uploadErrors[errKey]}/></div>}
+                      <div className="grid grid-cols-6 gap-0 items-center px-4 py-2.5 hover:bg-gray-50/50">
                         <div className="col-span-2 flex items-center gap-2">
                           <div className="w-5 h-5 rounded-md flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0" style={{background:selBrand.color+"aa"}}>{rest.name[0]}</div>
                           <p className="text-[10px] text-gray-500 truncate">{rest.name}</p>
@@ -11420,12 +11507,16 @@ function AdminRestaurants({}: PageProps) {
                           }
                         </div>
                         <div className="text-center flex items-center justify-center gap-1">
-                          <button onClick={()=>setBranchAsset(aKey)}
-                            className={`px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors flex items-center gap-1 ${done?"bg-gray-100 text-gray-600 hover:bg-emerald-50 hover:text-emerald-700":"bg-emerald-600 text-white hover:bg-emerald-700"}`}>
+                          <label className={`px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors inline-flex items-center gap-1 ${branchId?"cursor-pointer":"opacity-40 cursor-not-allowed"} ${done?"bg-gray-100 text-gray-600 hover:bg-emerald-50 hover:text-emerald-700":"bg-emerald-600 text-white hover:bg-emerald-700"}`}
+                            title={branchId?undefined:t("لا يوجد معرّف للفرع","Branch id unavailable")}>
+                            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={!branchId||uploadAssetsMut.isPending}
+                              onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(!f||!branchId) return; clearUploadError(errKey);
+                                uploadAssetsMut.mutate({ branchId, file: f }, { onSuccess:(r)=>{ noteRowErrors(errKey,r); setBranchAsset(aKey); }, onError:(er)=>noteUploadError(errKey,er) }); }}/>
                             <Upload size={9}/>{done?t("تحديث","Update"):t("رفع","Upload")}
-                          </button>
-                          <Btn size="sm"><Download size={9}/></Btn>
+                          </label>
+                          <Btn size="sm" onClick={()=>templateMut.mutate({ type:"fixed-assets" })}><Download size={9}/></Btn>
                         </div>
+                      </div>
                       </div>
                     );
                   })
@@ -11438,7 +11529,7 @@ function AdminRestaurants({}: PageProps) {
               <p className="text-xs font-bold text-purple-800 mb-3">{t("ملخص رفع البيانات","Upload Summary")} — {selBrand.name}</p>
               <div className="grid grid-cols-4 gap-3">
                 <div className="text-center bg-white rounded-lg p-2.5 border border-purple-100">
-                  <p className="text-base font-extrabold text-purple-700">{[ups.sales,ups.materials,ups.suppliers].filter(Boolean).length}/3</p>
+                  <p className="text-base font-extrabold text-purple-700">{[sharedDone.sales,sharedDone.materials,sharedDone.suppliers,sharedDone.fixedAssets].filter(Boolean).length}/4</p>
                   <p className="text-[10px] text-purple-500 mt-0.5">{t("بيانات مشتركة","Shared Data")}</p>
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-blue-100">
@@ -11454,11 +11545,13 @@ function AdminRestaurants({}: PageProps) {
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-gray-100">
                   {(()=>{
-                    const sharedDone  = [ups.sales,ups.materials,ups.suppliers].filter(Boolean).length;
+                    // Prefer the server's completionPct (counts four steps and only
+                    // credits successful uploads); fall back to local math offline.
+                    const sharedCount = [sharedDone.sales,sharedDone.materials,sharedDone.suppliers,sharedDone.fixedAssets].filter(Boolean).length;
+                    const restCount   = selBrand.restaurants.length;
                     const empDone     = selBrand.restaurants.filter(r=>restEmpDone(r.id)).length;
-                    const allBranches = selBrand.restaurants.reduce((s,r)=>s+r.branches.length,0);
-                    const assetsDone  = selBrand.restaurants.flatMap((r,_ri)=>r.branches.map((_b,bi)=>branchAssets[`${uploadBrand}_${r.id}_${bi}`]??false)).filter(Boolean).length;
-                    const pct         = Math.round(((sharedDone/3)+(empDone/selBrand.restaurants.length)+(assetsDone/(allBranches||1)))/3*100);
+                    const localPct    = Math.round(((sharedCount/4)+(restCount?empDone/restCount:0))/2*100);
+                    const pct         = apiCompletionPct ?? localPct;
                     const pctCls      = pct===100?"text-emerald-700":pct>=60?"text-amber-600":"text-gray-500";
                     return (<>
                       <p className={`text-base font-extrabold ${pctCls}`}>{pct}%</p>

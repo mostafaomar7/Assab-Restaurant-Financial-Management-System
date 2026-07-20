@@ -231,11 +231,59 @@ export type AdminBrandUploadType =
   | "employees"
   | "fixed-assets";
 
+/** One row of the per-owner upload progress list. */
+export interface AdminUploadRow {
+  type: AdminBrandUploadType;
+  status: "done" | "failed" | "queued" | "processing";
+  progressPct?: number;
+  parsedRows?: number;
+  failedRows?: number;
+  failureReason?: string | null;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
 export interface AdminBrandUploadStatus {
-  shared?: { sales?: boolean; materials?: boolean; suppliers?: boolean };
+  uploads?: AdminUploadRow[];
+  // `shared.fixedAssets` was added when completionPct started counting four
+  // steps instead of three; a failed upload no longer counts as complete.
+  shared?: {
+    sales?: boolean;
+    materials?: boolean;
+    suppliers?: boolean;
+    fixedAssets?: boolean;
+  };
+  completionPct?: number;
+  // legacy/compat — older payloads keyed progress per restaurant/branch
   employees?: Record<string, boolean>;
   assets?: Record<string, boolean>;
+}
+
+/** GET /admin/branches/{id}/upload-status — per-branch fixed-assets state. */
+export interface AdminBranchUploadStatus {
+  branchId?: string;
+  uploads?: AdminUploadRow[];
+  fixedAssets?: boolean;
   completionPct?: number;
+}
+
+/** GET /admin/restaurants/{id}/upload-status — per-restaurant employees state. */
+export interface AdminRestaurantUploadStatus {
+  restaurantId?: string;
+  uploads?: AdminUploadRow[];
+  employees?: boolean;
+  completionPct?: number;
+}
+
+/** Shared result shape for every admin upload endpoint. */
+export interface AdminUploadResult {
+  uploadId?: string;
+  rowsImported?: number;
+  uploadedCount?: number;
+  employeeCount?: number;
+  assetCount?: number;
+  status?: "done" | "failed" | "queued" | "processing";
+  errors?: Array<{ row: number; message: string }>;
 }
 
 // ─── Head (platform) ────────────────────────────────────────────────────────
