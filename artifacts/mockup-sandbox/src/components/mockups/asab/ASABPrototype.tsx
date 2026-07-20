@@ -82,6 +82,7 @@ import {
   useAdminBranchRequests,
   useApproveBranchRequest,
   useRejectBranchRequest,
+  useUpdateSubscriptionModules,
   useUploadAdminReport,
   useSendAdminReport,
   useAdminReportStatus,
@@ -11852,6 +11853,12 @@ function AdminSubscriptions({}: PageProps) {
   const toggleReminderMut = useToggleAutoReminder();
   const { data: subBrandsApi } = useAdminBrands();
   const createSubMut = useCreateAdminSubscription();
+  const updateModulesMut = useUpdateSubscriptionModules();
+  // Module keys come from the lookup — the endpoint stores whatever it is sent.
+  const { data: moduleLookup } = useLookup("modules");
+  const moduleOptions = (((moduleLookup as any)?.data ?? moduleLookup ?? []) as any[]);
+  const [modulesFor, setModulesFor] = useState<{id:string;name:string}|null>(null);
+  const [modulesDraft, setModulesDraft] = useState<string[]>([]);
   const [showAddSub, setShowAddSub] = useState(false);
   const [subForm, setSubForm] = useState({ brandId:"", plan:"فضي", months:12 });
   const { t, dir } = useLang();
@@ -12041,7 +12048,7 @@ function AdminSubscriptions({}: PageProps) {
                   <div className="flex gap-2 pt-1">
                     <Btn size="sm">{t("تعديل الباقة","Edit Plan")}</Btn>
                     <Btn size="sm" variant="ghost">{t("إضافة مطعم","Add Restaurant")}</Btn>
-                    <Btn size="sm" variant="ghost">{t("تعديل الموديولات","Edit Modules")}</Btn>
+                    <Btn size="sm" variant="ghost" onClick={()=>{ setModulesFor({ id: sub.id, name: sub.name }); setModulesDraft(sub.modules ?? []); }}>{t("تعديل الموديولات","Edit Modules")}</Btn>
                   </div>
                 </div>
               )}
@@ -12049,6 +12056,43 @@ function AdminSubscriptions({}: PageProps) {
           );
         })}
       </div>
+
+      {/* Edit the subscription's active modules (PATCH .../modules). */}
+      {modulesFor && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setModulesFor(null)} dir={dir}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800">{t("تعديل الموديولات","Edit Modules")} — {modulesFor.name}</h3>
+              <button onClick={()=>setModulesFor(null)} className="text-gray-400"><X size={18}/></button>
+            </div>
+            {moduleOptions.length===0
+              ? <p className="text-sm text-gray-400 py-6 text-center">{t("لا توجد موديولات متاحة","No modules available")}</p>
+              : <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
+                  {moduleOptions.map((m:any,mi:number)=>{
+                    const key = m.value ?? m.key ?? m.id ?? String(m);
+                    const label = m.labelAr ?? m.label ?? m.name ?? key;
+                    const on = modulesDraft.includes(key);
+                    return (
+                      <label key={key||mi} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm ${on?"border-purple-300 bg-purple-50 text-purple-800":"border-gray-200 text-gray-600"}`}>
+                        <input type="checkbox" checked={on} className="sr-only"
+                          onChange={()=>setModulesDraft(p=>p.includes(key)?p.filter(x=>x!==key):[...p,key])}/>
+                        {on && <CheckCircle2 size={13} className="text-purple-500 flex-shrink-0"/>}
+                        <span className="truncate">{label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+            }
+            <div className="flex gap-2 justify-end pt-4">
+              <Btn size="sm" onClick={()=>setModulesFor(null)}>{t("إلغاء","Cancel")}</Btn>
+              <Btn size="sm" variant="primary" disabled={updateModulesMut.isPending}
+                onClick={()=>updateModulesMut.mutate({ id: modulesFor.id, modules: modulesDraft }, { onSuccess:()=>setModulesFor(null) })}>
+                <CheckCircle2 size={12}/> {t("حفظ","Save")}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
