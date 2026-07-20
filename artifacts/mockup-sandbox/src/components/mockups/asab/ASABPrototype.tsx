@@ -1305,16 +1305,19 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
 
   // Brands/restaurants/branches come from the API (GET /admin/brands), not a static catalog.
   const { data: brandsApi } = useAdminBrands();
+  // Selections are stored as IDs — the endpoint wants UUIDs, and sending display
+  // names was a guaranteed 422 (BRANCH_NOT_IN_COMPANY / invalid brand id).
   const brandList = (Array.isArray(brandsApi) ? brandsApi : []).map((b:any)=>({
     id: b.id, name: b.name, color: b.color ?? "#7C3AED",
     abbr: b.abbr ?? (typeof b.name === "string" ? b.name.slice(0,2) : "؟"),
     restaurants: (b.restaurants ?? []).map((r:any)=>({
       id: r.id, name: r.name,
-      branches: (r.branches ?? []).map((br:any)=> typeof br === "string" ? br : br.name),
+      branches: (r.branches ?? []).map((br:any)=> typeof br === "string" ? { id:"", name:br } : { id: br.id ?? "", name: br.name }),
     })),
   }));
-  const availableRests = brandList.filter(b=>selBrands.includes(b.name)).flatMap(b=>b.restaurants);
-  const availableBranches = availableRests.filter(r=>selRests.includes(r.name)).flatMap(r=>r.branches);
+  const availableRests = brandList.filter(b=>selBrands.includes(b.id)).flatMap(b=>b.restaurants);
+  const availableBranches = availableRests.filter(r=>selRests.includes(r.id)).flatMap(r=>r.branches);
+  const brandNameById = new Map(brandList.map(b=>[b.id, b.name]));
 
   const scopeFor = (): AdminUserData["scope"] => {
     if(selBranches.length>0) return "branch";
@@ -1432,42 +1435,49 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   <label className="text-xs font-semibold text-gray-600 block mb-2">{t("تخصيص العلامات التجارية","Assign Brands")} <span className="text-red-500">*</span></label>
                   <div className="grid grid-cols-2 gap-2">
                     {brandList.map(b=>(
-                      <label key={b.id} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${selBrands.includes(b.name)?"border-purple-400 bg-purple-50":"border-gray-100 hover:border-gray-300"}`}>
-                        <input type="checkbox" checked={selBrands.includes(b.name)} onChange={()=>{ toggleArr(selBrands,b.name,setSelBrands); setSelRests([]); setSelBranches([]); }} className="sr-only"/>
+                      <label key={b.id} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${selBrands.includes(b.id)?"border-purple-400 bg-purple-50":"border-gray-100 hover:border-gray-300"}`}>
+                        <input type="checkbox" checked={selBrands.includes(b.id)} onChange={()=>{ toggleArr(selBrands,b.id,setSelBrands); setSelRests([]); setSelBranches([]); }} className="sr-only"/>
                         <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{background:b.color}}>{b.abbr}</div>
                         <span className="text-sm font-semibold text-gray-700">{b.name}</span>
-                        {selBrands.includes(b.name) && <CheckCircle2 size={14} className="text-purple-500 mr-auto"/>}
+                        {selBrands.includes(b.id) && <CheckCircle2 size={14} className="text-purple-500 mr-auto"/>}
                       </label>
                     ))}
                   </div>
                 </div>
 
-                {availableRests.length>0 && !isChief && (
+                {/* Restaurants are no longer assignable here — the endpoint rejects a
+                    non-empty `restaurants` (422). A branch manager still drills through
+                    a restaurant to reach its branches, so keep it for that role only. */}
+                {availableRests.length>0 && isBranchManager && (
                   <div>
-                    <label className="text-xs font-semibold text-gray-600 block mb-2">
-                      {isBranchManager ? t("اختر المطعم (واحد فقط)","Select Restaurant (one only)") : t("تخصيص المطاعم","Assign Restaurants")}
-                    </label>
+                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("اختر المطعم (واحد فقط)","Select Restaurant (one only)")}</label>
                     <div className="space-y-1.5 max-h-40 overflow-y-auto">
                       {availableRests.map(r=>(
-                        <label key={r.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all ${selRests.includes(r.name)?"border-purple-300 bg-purple-50":"border-gray-100 hover:border-gray-300"}`}>
-                          <input type="checkbox" checked={selRests.includes(r.name)} onChange={()=>{ if(isBranchManager){ setSelRests([r.name]); setSelBranches([]); } else toggleArr(selRests,r.name,setSelRests); }} className="sr-only"/>
+                        <label key={r.id} className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all ${selRests.includes(r.id)?"border-purple-300 bg-purple-50":"border-gray-100 hover:border-gray-300"}`}>
+                          <input type="checkbox" checked={selRests.includes(r.id)} onChange={()=>{ setSelRests([r.id]); setSelBranches([]); }} className="sr-only"/>
                           <span className="text-sm text-gray-700">{r.name}</span>
-                          {selRests.includes(r.name) && <CheckCircle2 size={13} className="text-purple-400 mr-auto"/>}
+                          {selRests.includes(r.id) && <CheckCircle2 size={13} className="text-purple-400 mr-auto"/>}
                         </label>
                       ))}
                     </div>
                   </div>
                 )}
 
+                {!isBranchManager && !isChief && selBrands.length>0 && (
+                  <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-xs text-blue-700">
+                    {t("تخصيص المطاعم يتم من شاشة «التوزيع»، مش من هنا.","Restaurant assignment is done from the Distribution screen, not here.")}
+                  </div>
+                )}
+
                 {isBranchManager && availableBranches.length>0 && (
                   <div>
-                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("تخصيص الفرع (واحد فقط)","Assign Branch (one only)")}</label>
+                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("تخصيص الفرع (واحد فقط)","Assign Branch (one only)")} <span className="text-red-500">*</span></label>
                     <div className="space-y-1.5 max-h-36 overflow-y-auto">
-                      {availableBranches.map(br=>(
-                        <label key={br} className={`flex items-center gap-3 px-3 py-2 rounded-lg border cursor-pointer transition-all ${selBranches.includes(br)?"border-emerald-300 bg-emerald-50":"border-gray-100 hover:border-gray-300"}`}>
-                          <input type="radio" name="branch" checked={selBranches.includes(br)} onChange={()=>setSelBranches([br])} className="sr-only"/>
-                          <span className="text-sm text-gray-700">{br}</span>
-                          {selBranches.includes(br) && <CheckCircle2 size={13} className="text-emerald-400 mr-auto"/>}
+                      {availableBranches.map((br:any)=>(
+                        <label key={br.id||br.name} className={`flex items-center gap-3 px-3 py-2 rounded-lg border transition-all ${br.id?"cursor-pointer":"opacity-40 cursor-not-allowed"} ${selBranches.includes(br.id)?"border-emerald-300 bg-emerald-50":"border-gray-100 hover:border-gray-300"}`}>
+                          <input type="radio" name="branch" disabled={!br.id} checked={selBranches.includes(br.id)} onChange={()=>setSelBranches([br.id])} className="sr-only"/>
+                          <span className="text-sm text-gray-700">{br.name}</span>
+                          {selBranches.includes(br.id) && <CheckCircle2 size={13} className="text-emerald-400 mr-auto"/>}
                         </label>
                       ))}
                     </div>
@@ -1519,9 +1529,10 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
               <div className="space-y-1 text-xs text-gray-600">
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الاسم:","Name:")}</span><span className="font-medium">{name||"—"}</span></div>
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الدور:","Role:")}</span><span className="font-medium">{en?(ROLES.find(r=>r.v===role)?.enV||role):role}</span></div>
-                <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("العلامات:","Brands:")}</span><span className="font-medium">{selBrands.join(en?", ":"، ")||"—"}</span></div>
-                {selRests.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("المطاعم:","Restaurants:")}</span><span className="font-medium">{selRests.join(en?", ":"، ")}</span></div>}
-                {selBranches.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الفرع:","Branch:")}</span><span className="font-medium">{selBranches.join(en?", ":"، ")}</span></div>}
+                {/* Selections are ids — resolve them back to names for the summary. */}
+                <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("العلامات:","Brands:")}</span><span className="font-medium">{selBrands.map(id=>brandNameById.get(id)??id).join(en?", ":"، ")||"—"}</span></div>
+                {selRests.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("المطاعم:","Restaurants:")}</span><span className="font-medium">{selRests.map(id=>availableRests.find(r=>r.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
+                {selBranches.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الفرع:","Branch:")}</span><span className="font-medium">{selBranches.map(id=>(availableBranches as any[]).find(b=>b.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الموديولات:","Modules:")}</span><span className="font-medium">{selModules.length} {t("موديول","modules")}</span></div>
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("النطاق:","Scope:")}</span><span className="font-medium capitalize">{scopeFor()}</span></div>
               </div>
@@ -10232,6 +10243,12 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   const resetPwdMut = useResetAdminUserPassword();
   const deleteUser = (email:string) => {
     const target = users.find(u=>u.email===email);
+    // Deleting a dashboard user now also revokes their mobile app access and
+    // kills their app sessions; reactivating does not restore it. Say so.
+    if (!window.confirm(t(
+      "حذف هذا المستخدم؟ سيتم إلغاء دخوله من تطبيق الجوال أيضاً وإنهاء جلساته، وإعادة التفعيل لا تُرجِع صلاحية التطبيق.",
+      "Delete this user? Their mobile app access is revoked and their app sessions ended. Reactivating does not restore mobile access.",
+    ))) return;
     setUsers((prev:AdminUserData[])=>prev.filter(u=>u.email!==email));
     if (target?.id) deleteUserMut.mutate(target.id);
   };

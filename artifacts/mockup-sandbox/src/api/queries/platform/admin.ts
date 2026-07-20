@@ -313,10 +313,17 @@ export function useResetBrandOwnerPassword() {
         ok: boolean;
         emailedTo: string;
         resetAt: string;
+        emailSent?: boolean;
       }>(`/admin/brands/${brandId}/owner/reset-password`, { notify });
       return res.data;
     },
+    // emailSent is meaningful now — credential mail is refused outright when the
+    // mailer is misconfigured, so don't claim delivery that did not happen.
     onSuccess: (data) => {
+      if (data?.emailSent === false) {
+        toast.warning("تم إعادة تعيين الباسورد، لكن لم يصل البريد للمالك.");
+        return;
+      }
       toast.success(
         data?.emailedTo
           ? `تم إرسال باسورد جديد إلى ${data.emailedTo}`
@@ -637,9 +644,13 @@ export function useImportAdminUsers() {
     mutationFn: async (file: File) => {
       const fd = new FormData();
       fd.append("file", file);
+      assertUploadFile(file);
       const res = await api.post<{
         imported: number;
         skipped: number;
+        // Imported users are emailed their password; a non-zero count means
+        // those accounts exist but nobody received credentials.
+        emailFailed?: number;
         errors: Array<{ row: number; field: string; message: string }>;
       }>("/admin/users/import", fd, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -649,6 +660,12 @@ export function useImportAdminUsers() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["platform", "admin", "users"] });
       toast.success(`تم استيراد ${data.imported} مستخدم`);
+      if (data?.skipped) toast.warning(`تم تخطي ${data.skipped} صف`);
+      if (data?.emailFailed) {
+        toast.warning(
+          `${data.emailFailed} حساب لم تصله كلمة المرور — استخدم «إعادة تعيين كلمة المرور» لهم.`,
+        );
+      }
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
