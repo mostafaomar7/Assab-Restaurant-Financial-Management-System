@@ -1,4 +1,5 @@
 import "./_group.css";
+import { toast } from "sonner";
 import { useState, useEffect, useMemo, ReactNode, createContext, useContext, useRef, type MouseEvent as ReactMouseEvent } from "react";
 import {
   KeyRound, Webhook, History,
@@ -61,6 +62,8 @@ import {
   useUpgradeAdminCompany,
   useRenewSubscription,
   useChangeSubscriptionPlan,
+  useUpdateSubscriptionModules,
+  useAdminSuppliers,
   useSuspendSubscription,
   useActivateSubscription,
   useToggleAutoReminder,
@@ -82,7 +85,6 @@ import {
   useAdminBranchRequests,
   useApproveBranchRequest,
   useRejectBranchRequest,
-  useUpdateSubscriptionModules,
   useUploadAdminReport,
   useSendAdminReport,
   useAdminReportStatus,
@@ -242,9 +244,10 @@ import { PermissionHistoryDrawer } from "../../shared/PermissionHistoryDrawer";
 import { LiveChatWidget } from "../../shared/LiveChatWidget";
 import { useLanguagePref } from "../../../auth/useLanguagePref";
 import { useAuth } from "../../../auth/AuthContext";
-import { toast } from "sonner";
 import { readEntrySelection, clearEntrySelection } from "../../../auth/entrySelection";
-import { readAppLang, writeAppLang, type AppLang } from "../../../appLang";
+import { getSiteLang, setSiteLang } from "../../../auth/siteLang";
+import { V, G, CYAN, LOGO, ensureAuthStyles } from "../../../auth/authTheme";
+import { LangToggle } from "../../../auth/LangToggle";
 import { SUPPLIER_PORTAL_ENABLED } from "../../../featureFlags";
 
 // ─────────────────────────────────────────────
@@ -259,6 +262,8 @@ interface AdminUserData {
   companyId?: string;
   scope: "all" | "brand" | "restaurant" | "branch";
   status: "active" | "inactive";
+  createdAt?: string; lastLoginAt?: string;
+  supplierId?: string;
 }
 
 /** reportsTo is a userId on write but an object on read — render the name safely. */
@@ -630,12 +635,13 @@ const NAV_CONFIG: Record<RoleId, NavEntry[]> = {
     { section:"الرئيسية" },
     { id:"admin-overview",       label:"نظرة عامة",        icon:<LayoutDashboard size={16}/> },
     { section:"الإدارة" },
-    { id:"admin-users",          label:"المستخدمون",        icon:<Users size={16}/>,           badge:3 },
+    { id:"admin-users",          label:"المستخدمون",        icon:<Users size={16}/> },
     { id:"admin-restaurants",    label:"المطاعم والفروع",   icon:<Home size={16}/> },
-    { id:"admin-branch-requests",label:"طلبات الفروع",      icon:<Building2 size={16}/> },
-    { id:"admin-subscriptions",  label:"الاشتراكات",        icon:<Shield size={16}/>,          badge:2, badgeColor:"yellow" as const },
+    // { id:"admin-branch-requests",label:"طلبات الفروع",      icon:<Building2 size={16}/> },  // مخفي مؤقتاً من السايد بار
+
+    { id:"admin-subscriptions",  label:"الاشتراكات",        icon:<Shield size={16}/>,          badgeColor:"yellow" as const },
     { id:"admin-packages",       label:"الباقات",           icon:<Package size={16}/> },
-    { id:"admin-companies",      label:"اشتراكات الشركات",  icon:<Building2 size={16}/>,       badge:5, badgeColor:"yellow" as const },
+    { id:"admin-companies",      label:"اشتراكات الشركات",  icon:<Building2 size={16}/>,       badgeColor:"yellow" as const },
     { id:"admin-permissions",    label:"الصلاحيات",         icon:<Settings size={16}/> },
     { section:"التقارير" },
     { id:"admin-reports",        label:"مدير التقارير",     icon:<BarChart3 size={16}/> },
@@ -1134,7 +1140,6 @@ function buildAuditTrail(op: Op): AuditEvent[] {
 // LOGIN SCREEN
 // ─────────────────────────────────────────────
 function LoginScreen({ onLogin }:{ onLogin:(r:RoleId)=>void }) {
-  const [hovered, setHovered] = useState<RoleId|null>(null);
   const { lang, setLang, t } = useLang();
 
   const allRoles: { id:RoleId; icon:string; title:string; titleEn:string; desc:string; descEn:string; badge:string; badgeEn:string; badgeCls:string; accent:string }[] = [
@@ -1147,66 +1152,49 @@ function LoginScreen({ onLogin }:{ onLogin:(r:RoleId)=>void }) {
   ];
   // T13 — single-flag gate for «بوابة المورد»: drop the supplier role when off.
   const roles = allRoles.filter(r => r.id !== "supplier" || SUPPLIER_PORTAL_ENABLED);
+  ensureAuthStyles();
 
   return (
-    <div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#0F1C35 0%,#1B3A6B 60%,#2A5298 100%)", display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:36, padding:24, direction: lang==="ar"?"rtl":"ltr" }}>
-      {/* Language toggle */}
-      <div style={{ position:"absolute", top:20, left: lang==="ar"?20:undefined, right: lang==="en"?20:undefined }}>
-        <button onClick={()=>setLang(lang==="ar"?"en":"ar")}
-          style={{ display:"flex", alignItems:"center", gap:6, padding:"6px 14px", borderRadius:20, background:"rgba(255,255,255,0.1)", border:"1px solid rgba(255,255,255,0.2)", color:"rgba(255,255,255,0.7)", fontSize:12, fontWeight:600, cursor:"pointer" }}>
-          <span>🌐</span> {lang==="ar"?"English":"عربي"}
-        </button>
-      </div>
+    <div className="asab-landing" dir={lang==="ar"?"rtl":"ltr"} style={{ direction: lang==="ar"?"rtl":"ltr" }}>
+      <div className="asab-blob asab-blob--a" style={{ width:340, height:340, background:V[300], opacity:0.3, top:-120, insetInlineStart:-80 }} />
+      <div className="asab-blob asab-blob--b" style={{ width:320, height:320, background:CYAN, opacity:0.12, bottom:-120, insetInlineEnd:-60 }} />
 
-      {/* Header */}
-      <div style={{ textAlign:"center" }}>
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:14, marginBottom:8 }}>
-          <div style={{ width:52, height:52, borderRadius:14, background:"linear-gradient(135deg,#7C3AED,#00D9FF)", display:"flex", alignItems:"center", justifyContent:"center" }}>
-            <span style={{ color:"#fff", fontWeight:900, fontSize:24 }}>ع</span>
-          </div>
-          <div style={{ color:"#fff", fontWeight:800, fontSize:34, letterSpacing:-1 }}>
-            عصب <span style={{ color:"#E8A020" }}>ASAB</span>
-          </div>
+      {/* Top bar: logo + language */}
+      <header style={{ position:"relative", display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px 28px", borderBottom:`1px solid ${G[200]}`, background:"rgba(255,255,255,0.75)", backdropFilter:"blur(10px)", WebkitBackdropFilter:"blur(10px)" }}>
+        <img src={LOGO} alt="ASAB — عصب" style={{ height:34, width:"auto" }} />
+        <LangToggle lang={lang} onChange={setLang} variant="light" />
+      </header>
+
+      {/* Main — role picker */}
+      <main style={{ position:"relative", flex:1, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"44px 24px" }}>
+        <div className="asab-rise" style={{ textAlign:"center", marginBottom:30 }}>
+          <h1 style={{ fontSize:27, fontWeight:800, color:G[900], margin:0, letterSpacing:"-0.01em" }}>{t("اختر دورك","Choose your role")}</h1>
+          <p style={{ fontSize:14, color:G[500], margin:"8px 0 0" }}>{t("ابدأ من حيث تحتاج — كل دور بصلاحياته وشاشاته","Start where you need — each role has its own permissions and screens")}</p>
         </div>
-        <p style={{ color:"rgba(255,255,255,0.5)", fontSize:14 }}>{t("نظام إدارة مالية المطاعم متعدد الفروع","Multi-Branch Restaurant Financial Management System")}</p>
-        <p style={{ color:"rgba(255,255,255,0.3)", fontSize:12, marginTop:6 }}>{t("اختر دورك للدخول إلى النموذج التفاعلي","Choose your role to enter the interactive demo")}</p>
-      </div>
 
-      {/* Role cards */}
-      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:14, maxWidth:900, width:"100%" }}>
-        {roles.map(r => {
-          const isHov = hovered === r.id;
-          return (
+        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:16, width:"100%", maxWidth:900 }}>
+          {roles.map((r, i) => (
             <button
               key={r.id}
               type="button"
+              className="asab-role asab-rise"
+              style={{ animationDelay:`${i*60}ms` }}
               onClick={() => onLogin(r.id)}
-              onMouseEnter={() => setHovered(r.id)}
-              onMouseLeave={() => setHovered(null)}
-              style={{
-                background: isHov ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.07)",
-                border: `1.5px solid ${isHov ? r.accent : "rgba(255,255,255,0.13)"}`,
-                borderRadius: 16,
-                padding: "24px 18px",
-                cursor: "pointer",
-                textAlign: "center",
-                fontFamily: "inherit",
-                transform: isHov ? "translateY(-4px)" : "translateY(0)",
-                transition: "all 0.18s ease",
-                outline: "none",
-                boxShadow: isHov ? `0 8px 24px rgba(0,0,0,0.3), 0 0 0 1px ${r.accent}33` : "none",
-              }}
+              onMouseEnter={(e) => { e.currentTarget.style.borderColor = r.accent; }}
+              onMouseLeave={(e) => { e.currentTarget.style.borderColor = G[200]; }}
             >
-              <div style={{ fontSize:38, marginBottom:10 }}>{r.icon}</div>
-              <div style={{ color:"#fff", fontWeight:700, fontSize:15, marginBottom:6 }}>{t(r.title, r.titleEn)}</div>
-              <div style={{ color:"rgba(255,255,255,0.45)", fontSize:11, lineHeight:1.65, marginBottom:12, minHeight:32 }}>{t(r.desc, r.descEn)}</div>
-              <span style={{ display:"inline-block", padding:"4px 12px", borderRadius:20, fontSize:10, fontWeight:700, background:`${r.accent}33`, color:isHov ? "#fff" : "rgba(255,255,255,0.7)", border:`1px solid ${r.accent}55`, transition:"all 0.18s" }}>{t(r.badge, r.badgeEn)}</span>
+              <div style={{ width:56, height:56, borderRadius:15, margin:"0 auto 12px", display:"flex", alignItems:"center", justifyContent:"center", fontSize:28, background:`${r.accent}14`, border:`1px solid ${r.accent}33` }}>{r.icon}</div>
+              <div style={{ color:G[900], fontWeight:700, fontSize:15, marginBottom:6 }}>{t(r.title, r.titleEn)}</div>
+              <div style={{ color:G[500], fontSize:12, lineHeight:1.65, marginBottom:12, minHeight:34 }}>{t(r.desc, r.descEn)}</div>
+              <span style={{ display:"inline-block", padding:"3px 12px", borderRadius:99, fontSize:10.5, fontWeight:700, background:`${r.accent}14`, color:r.accent, border:`1px solid ${r.accent}33` }}>{t(r.badge, r.badgeEn)}</span>
             </button>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      </main>
 
-      <p style={{ color:"rgba(255,255,255,0.2)", fontSize:11 }}>{t("نموذج تفاعلي — ASAB Prototype v2.0","Interactive Demo — ASAB Prototype v2.0")}</p>
+      <footer style={{ position:"relative", textAlign:"center", padding:"16px 24px 28px", borderTop:`1px solid ${G[200]}` }}>
+        <p style={{ fontSize:12, color:G[400], margin:0 }}>{t("عصب ASAB · نظام إدارة مالية المطاعم · النسخة التجريبية 2.0","ASAB · Restaurant financial management · Beta 2.0")}</p>
+      </footer>
     </div>
   );
 }
@@ -1593,6 +1581,21 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
   const headPendingCount = useMemo(()=>ops.filter(o=>o.status==="approved").length, [ops]);
   const totalAccPending = useMemo(()=>ops.filter(o=>o.status==="pending").length, [ops]);
 
+  // Admin sidebar badges = live "needs attention" counts (not static seeds). Gated on the
+  // admin role so non-admin sidebars never hit /admin/* endpoints.
+  const isAdmin = role === "admin";
+  const { data: adminOverview } = useAdminOverview({ enabled: isAdmin });
+  const { data: adminUsersData } = useAdminUsers({}, { enabled: isAdmin });
+  const { data: adminCompaniesData } = useAdminCompanies({}, { enabled: isAdmin });
+  const adminBadges = useMemo(()=>{
+    if (!isAdmin) return {} as Record<string,number>;
+    const inactiveUsers = (Array.isArray(adminUsersData) ? adminUsersData : []).filter((u:any)=>u?.status==="inactive").length;
+    const brandsNeedingRenewal = Number((adminOverview as any)?.kpis?.brandsNeedingRenewal ?? 0);
+    const companies = Array.isArray(adminCompaniesData) ? (adminCompaniesData as any[]) : [];
+    const companiesAttention = companies.filter((c:any)=> (c?.status && c.status!=="active") || (typeof c?.daysLeft==="number" && c.daysLeft<=30)).length;
+    return { "admin-users": inactiveUsers, "admin-subscriptions": brandsNeedingRenewal, "admin-companies": companiesAttention };
+  }, [isAdmin, adminOverview, adminUsersData, adminCompaniesData]);
+
   const getBadge = (item: NavItem): number|undefined => {
     if (role==="accountant") {
       if (item.id==="acc-dashboard") return totalAccPending||undefined;
@@ -1600,6 +1603,7 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
       return pendingByModule[item.id]||undefined;
     }
     if (role==="head" && item.id==="head-pending") return headPendingCount||undefined;
+    if (isAdmin) return adminBadges[item.id] || undefined;
     return item.badge||undefined;
   };
 
@@ -10111,15 +10115,69 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   users: AdminUserData[];
   setUsers:(v:any)=>void;
 }) {
-  const { t, dir } = useLang();
+  const { t, dir, lang } = useLang();
   const { data: apiUsers } = useAdminUsers();
   const { data: distApi } = useAdminDistribution();
   const { data: modulesLookup } = useAdminModules();
+  const { data: brandsTreeApi } = useAdminBrands();
   const importUsersMut = useImportAdminUsers();
+  const loc = lang === "ar" ? "ar-EG" : "en-GB";
+  const fmtUserDate = (v?: string) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString(loc, { year: "numeric", month: "long", day: "numeric" });
+  };
+  const fmtUserDateTime = (v?: string) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleString(loc, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
   // Sync the user list from the API (GET /admin/users). No static seed.
   useEffect(() => {
     if (Array.isArray(apiUsers)) setUsers(apiUsers as any);
   }, [apiUsers]);
+
+  // The API returns only the ASSIGNED level for a user (a branch manager gets his one
+  // branch; brands/restaurants come back empty). To show the full path, derive the parent
+  // restaurant + brand of each assigned branch (and the parent brand of each restaurant)
+  // from the brand hierarchy (GET /admin/brands). Keyed by both id and name for tolerance.
+  const branchParent = useMemo(() => {
+    const byBranch = new Map<string, { restaurant: string; brand: string }>();
+    const byRestaurant = new Map<string, string>();
+    const tree = Array.isArray(brandsTreeApi) ? (brandsTreeApi as any[]) : [];
+    for (const b of tree) {
+      const brandName = b?.name ?? "";
+      for (const r of (b?.restaurants ?? [])) {
+        const restName = r?.name ?? "";
+        if (r?.id) byRestaurant.set(String(r.id), brandName);
+        if (restName) byRestaurant.set(restName, brandName);
+        for (const br of (r?.branches ?? [])) {
+          const brName = typeof br === "string" ? br : (br?.name ?? "");
+          const brId = typeof br === "string" ? "" : (br?.id ?? "");
+          const val = { restaurant: restName, brand: brandName };
+          if (brId) byBranch.set(String(brId), val);
+          if (brName) byBranch.set(brName, val);
+        }
+      }
+    }
+    return { byBranch, byRestaurant };
+  }, [brandsTreeApi]);
+
+  // Fill in the empty brand/restaurant levels for a user from its assigned branch(es).
+  const derivePath = (u: AdminUserData) => {
+    let brands = [...(u.brands ?? [])];
+    let restaurants = [...(u.restaurants ?? [])];
+    const branches = u.branches ?? [];
+    if (restaurants.length === 0 && branches.length > 0) {
+      restaurants = Array.from(new Set(branches.map(b => branchParent.byBranch.get(b)?.restaurant).filter(Boolean) as string[]));
+    }
+    if (brands.length === 0) {
+      const fromBranches = branches.map(b => branchParent.byBranch.get(b)?.brand).filter(Boolean) as string[];
+      const fromRests = restaurants.map(r => branchParent.byRestaurant.get(r)).filter(Boolean) as string[];
+      brands = Array.from(new Set([...fromBranches, ...fromRests]));
+    }
+    return { brands, restaurants, branches };
+  };
   const importFileRef = useRef<HTMLInputElement>(null);
   const [search,     setSearch]     = useState("");
   const [roleFilter, setRoleFilter] = useState("");
@@ -10753,6 +10811,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
           : <div className="divide-y divide-gray-100">
               {shown.map((u,i)=>{
                 const isExp = expandedRow===u.email;
+                const path = derivePath(u);
                 return (
                   <div key={i}>
                     <div className={`px-4 py-3 flex items-center gap-3 hover:bg-gray-50 cursor-pointer transition-colors ${isExp?"bg-purple-50/30":""}`}
@@ -10770,7 +10829,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                       <div className="flex items-center gap-2 flex-shrink-0">
                         <div className="text-right hidden md:block">
                           <p className="text-[10px] text-gray-400">العلامات التجارية</p>
-                          <p className="text-xs font-medium text-gray-600 max-w-[160px] truncate">{u.brands.join("، ")||"—"}</p>
+                          <p className="text-xs font-medium text-gray-600 max-w-[160px] truncate">{path.brands.join("، ")||"—"}</p>
                         </div>
                         <ChevronDown size={14} className={`text-gray-400 transition-transform ${isExp?"rotate-180":""}`}/>
                       </div>
@@ -10782,7 +10841,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                           <div>
                             <p className="text-gray-400 font-semibold mb-1">{t("العلامات التجارية","Brands")}</p>
                             <div className="space-y-0.5">
-                              {u.brands.length>0 ? u.brands.map(b=>{
+                              {path.brands.length>0 ? path.brands.map(b=>{
                                 const bc=BRANDS_CATALOG.find(x=>x.name===b);
                                 return <div key={b} className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full flex-shrink-0" style={{background:bc?.color||"#888"}}/><span>{b}</span></div>;
                               }) : <span className="text-gray-400">—</span>}
@@ -10791,13 +10850,13 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                           <div>
                             <p className="text-gray-400 font-semibold mb-1">{t("المطاعم المخصصة","Assigned Restaurants")}</p>
                             <div className="space-y-0.5">
-                              {u.restaurants.length>0 ? u.restaurants.map(r=><div key={r}>{r}</div>) : <span className="text-gray-400">{u.scope==="brand"?"جميع مطاعم العلامة":"—"}</span>}
+                              {path.restaurants.length>0 ? path.restaurants.map(r=><div key={r}>{r}</div>) : <span className="text-gray-400">{u.scope==="brand"?t("جميع مطاعم العلامة","All brand restaurants"):"—"}</span>}
                             </div>
                           </div>
                           <div>
                             <p className="text-gray-400 font-semibold mb-1">{t("الفروع المخصصة","Assigned Branches")}</p>
                             <div className="space-y-0.5">
-                              {u.branches.length>0 ? u.branches.map(b=><div key={b}>{b}</div>) : <span className="text-gray-400">{u.scope==="restaurant"?"جميع فروع المطعم":"—"}</span>}
+                              {path.branches.length>0 ? path.branches.map(b=><div key={b}>{b}</div>) : <span className="text-gray-400">{u.scope==="restaurant"?t("جميع فروع المطعم","All restaurant branches"):"—"}</span>}
                             </div>
                           </div>
                           <div>
@@ -10812,18 +10871,14 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                             <Clock size={12} className="text-gray-400 flex-shrink-0"/>
                             <div>
                               <p className="text-gray-400 text-[10px]">{t("آخر تسجيل دخول","Last Login")}</p>
-                              <p className="font-semibold text-gray-700">
-                                {["اليوم 09:15 ص","أمس 14:30","12 أكت 2025","10 أكت 2025","8 أكت 2025","اليوم 11:00 ص","أمس 09:45","13 أكت 2025","11 أكت 2025","9 أكت 2025"][i%10]}
-                              </p>
+                              <p className="font-semibold text-gray-700">{fmtUserDateTime(u.lastLoginAt)}</p>
                             </div>
                           </div>
                           <div className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
                             <Calendar size={12} className="text-gray-400 flex-shrink-0"/>
                             <div>
                               <p className="text-gray-400 text-[10px]">{t("تاريخ الإنشاء","Created At")}</p>
-                              <p className="font-semibold text-gray-700">
-                                {["5 يناير 2025","12 مارس 2025","20 فبراير 2025","1 أبريل 2025","15 مايو 2025","8 يونيو 2025","3 يوليو 2025","25 أغسطس 2025","10 سبتمبر 2025","1 أكتوبر 2025"][i%10]}
-                              </p>
+                              <p className="font-semibold text-gray-700">{fmtUserDate(u.createdAt)}</p>
                             </div>
                           </div>
                         </div>
@@ -10836,10 +10891,6 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                         <div className="flex gap-2 pt-2 border-t border-gray-200">
                           <Btn size="sm"><Edit2 size={12}/> {t("تعديل الصلاحيات","Edit Permissions")}</Btn>
                           <Btn size="sm" variant="ghost" onClick={(e)=>{ e.stopPropagation(); if(u.id && window.confirm(t("إعادة تعيين كلمة مرور هذا المستخدم؟ سيتم إرسال كلمة مرور جديدة بالبريد.","Reset this user's password? A new password will be emailed."))) resetPwdMut.mutate({ id: u.id }); }}>{t("إعادة تعيين كلمة المرور","Reset Password")}</Btn>
-                          <button onClick={(e)=>{ e.stopPropagation(); deleteUser(u.email); }}
-                            className="mr-auto px-3 py-1 rounded-lg text-xs text-red-500 hover:bg-red-50 flex items-center gap-1">
-                            <Trash2 size={12}/> {t("حذف","Delete")}
-                          </button>
                         </div>
                       </div>
                     )}
@@ -11132,14 +11183,21 @@ function AdminRestaurants({}: PageProps) {
   const [restTab, setRestTab]               = useState<"structure"|"upload">("structure");
   type UploadKey = "sales"|"materials"|"employees"|"suppliers";
   const [uploadBrand,   setUploadBrand]     = useState<string>("reem");
-  const [brandUploads,  setBrandUploads]    = useState<Record<string,Record<UploadKey,boolean>>>({
-    reem:     { sales:true,  materials:true,  employees:false, suppliers:false },
-    herfy:    { sales:true,  materials:false, employees:false, suppliers:false },
-    mcd:      { sales:false, materials:false, employees:false, suppliers:false },
-    broasted: { sales:false, materials:false, employees:false, suppliers:false },
-  });
+  // No fake seed — the real done-state is synced from GET /admin/brands/{id}/upload-status.
+  const [brandUploads,  setBrandUploads]    = useState<Record<string,Record<UploadKey,boolean>>>({});
   const setUploaded = (brandId:string, key:UploadKey) =>
-    setBrandUploads(p=>({...p,[brandId]:{...p[brandId],[key]:true}}));
+    setBrandUploads(p=>({...p,[brandId]:{...(p[brandId] ?? { sales:false, materials:false, employees:false, suppliers:false }),[key]:true}}));
+  // Reflect the truthful server state (shared.* only turns true after a successful upload).
+  const { data: uploadStatusApi } = useAdminBrandUploadStatus(uploadBrand);
+  useEffect(() => {
+    const shared = (uploadStatusApi as any)?.shared;
+    if (!shared) return;
+    setBrandUploads(p=>({ ...p, [uploadBrand]: {
+      ...(p[uploadBrand] ?? { sales:false, materials:false, employees:false, suppliers:false }),
+      sales: !!shared.sales, materials: !!shared.materials, suppliers: !!shared.suppliers,
+    }}));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadStatusApi, uploadBrand]);
   const [branchAssets, setBranchAssets] = useState<Record<string,boolean>>({
     "reem_r1_0":true, "reem_r1_1":false,
     "reem_r2_0":false,"reem_r2_1":false,
@@ -11844,67 +11902,192 @@ function AdminRestaurants({}: PageProps) {
   );
 }
 
+// Inline editor modal for a subscription card's three actions:
+// change plan · add restaurant · edit modules. All three post to real endpoints.
+function SubEditModal(props: {
+  edit: { kind: "plan" | "restaurant" | "modules"; sub: any };
+  packages: AdminPackage[];
+  moduleOptions: Array<{ key: string; value?: string; labelAr: string; labelEn: string }>;
+  changePlan: (id: string, plan: string) => void;
+  addRestaurant: (brandId: string, name: string, city: string) => void;
+  saveModules: (id: string, modules: string[]) => void;
+  pending: boolean;
+  onClose: () => void;
+}) {
+  const { edit, packages, moduleOptions, changePlan, addRestaurant, saveModules, pending, onClose } = props;
+  const { t, lang } = useLang();
+  const { sub } = edit;
+  const [plan, setPlan] = useState<string>(() => {
+    if (packages.some((p) => p.code === sub.plan)) return sub.plan;
+    return packages[0]?.code ?? "";
+  });
+  const [restName, setRestName] = useState("");
+  const [restCity, setRestCity] = useState("");
+  const [mods, setMods] = useState<Set<string>>(() => new Set<string>(Array.isArray(sub.modules) ? sub.modules : []));
+  const title =
+    edit.kind === "plan" ? t("تعديل الباقة", "Edit Plan")
+      : edit.kind === "restaurant" ? t("إضافة مطعم", "Add Restaurant")
+        : t("تعديل الموديولات", "Edit Modules");
+
+  const canSave =
+    edit.kind === "plan" ? !!plan && plan !== sub.plan
+      : edit.kind === "restaurant" ? restName.trim().length > 0 && restCity.trim().length > 0
+        : true;
+
+  const submit = () => {
+    if (edit.kind === "plan") changePlan(sub.id, plan);
+    else if (edit.kind === "restaurant") addRestaurant(sub.brandId, restName.trim(), restCity.trim());
+    else saveModules(sub.id, Array.from(mods));
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={(e)=>e.stopPropagation()} dir="rtl">
+        <div className="px-5 py-4 bg-gradient-to-l from-purple-700 to-purple-600 text-white flex items-center justify-between">
+          <h3 className="font-bold">{title} · {sub.name}</h3>
+          <button onClick={onClose} className="text-purple-200 hover:text-white"><X size={18}/></button>
+        </div>
+        <div className="p-5 space-y-3">
+          {edit.kind === "plan" && (
+            <div>
+              <label className="text-xs font-semibold text-gray-600 block mb-1">{t("الباقة","Plan")}</label>
+              <select value={plan} onChange={(e)=>setPlan(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400">
+                {packages.length
+                  ? packages.map((p)=><option key={p.id} value={p.code}>{p.name}</option>)
+                  : <option value="">{t("لا توجد باقات","No packages")}</option>}
+              </select>
+            </div>
+          )}
+          {edit.kind === "restaurant" && (
+            <>
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("اسم المطعم","Restaurant name")}</label>
+                <input value={restName} onChange={(e)=>setRestName(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400" placeholder={t("مطعم جديد","New restaurant")}/></div>
+              <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("المدينة","City")}</label>
+                <input value={restCity} onChange={(e)=>setRestCity(e.target.value)} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400" placeholder={t("الرياض","Riyadh")}/></div>
+            </>
+          )}
+          {edit.kind === "modules" && (
+            <div className="grid grid-cols-2 gap-2 max-h-64 overflow-y-auto">
+              {moduleOptions.length === 0 && <p className="text-xs text-gray-400 col-span-2">{t("لا توجد موديولات متاحة","No modules available")}</p>}
+              {moduleOptions.map((m)=>{
+                const key = m.value ?? m.key;
+                const on = mods.has(key);
+                return (
+                  <button key={key} type="button" onClick={()=>setMods((prev)=>{ const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
+                    className={`text-xs px-3 py-2 rounded-lg border text-right transition-colors ${on ? "bg-purple-50 border-purple-300 text-purple-700 font-semibold" : "bg-white border-gray-200 text-gray-500"}`}>
+                    {on ? "✓ " : ""}{lang === "en" ? m.labelEn : m.labelAr}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex gap-2 justify-end pt-1">
+            <Btn onClick={onClose}>{t("إلغاء","Cancel")}</Btn>
+            <Btn variant="primary" disabled={!canSave || pending} onClick={submit}>{t("حفظ","Save")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminSubscriptions({}: PageProps) {
   const { data: apiSubs } = useAdminSubscriptions();
   const renewMut = useRenewSubscription();
   const changePlanMut = useChangeSubscriptionPlan();
+  const updateSubModulesMut = useUpdateSubscriptionModules();
+  const createRestMut = useCreateAdminRestaurant();
   const suspendSubMut = useSuspendSubscription();
   const activateSubMut = useActivateSubscription();
   const toggleReminderMut = useToggleAutoReminder();
   const { data: subBrandsApi } = useAdminBrands();
   const createSubMut = useCreateAdminSubscription();
-  const updateModulesMut = useUpdateSubscriptionModules();
-  // Module keys come from the lookup — the endpoint stores whatever it is sent.
-  const { data: moduleLookup } = useLookup("modules");
-  const moduleOptions = (((moduleLookup as any)?.data ?? moduleLookup ?? []) as any[]);
-  const [modulesFor, setModulesFor] = useState<{id:string;name:string}|null>(null);
-  const [modulesDraft, setModulesDraft] = useState<string[]>([]);
+  // Plans come from GET /admin/packages (active only) — the SAME source the
+  // AddBrand dropdown uses. Hardcoded silver/gold/platinum was rejected by the
+  // backend ("plan is invalid") because they aren't the packages the admin created.
+  const { data: packagesApi = [] } = useAdminPackages();
+  const activePackages = (Array.isArray(packagesApi) ? packagesApi : []).filter((p) => p.isActive);
+  const { data: modulesLookup } = useAdminModules();
+  type ModuleOpt = { key: string; value?: string; labelAr: string; labelEn: string };
+  const moduleOptions: ModuleOpt[] = Array.isArray((modulesLookup as any)?.data)
+    ? ((modulesLookup as any).data as ModuleOpt[])
+    : Array.isArray(modulesLookup)
+      ? (modulesLookup as unknown as ModuleOpt[])
+      : [];
   const [showAddSub, setShowAddSub] = useState(false);
-  const [subForm, setSubForm] = useState({ brandId:"", plan:"فضي", months:12 });
+  const [subForm, setSubForm] = useState<{ brandId: string; plan: string; months: number }>({ brandId: "", plan: "", months: 12 });
+  // Normalize the create-form plan to a real active package code once they load.
+  useEffect(() => {
+    if (activePackages.length && !activePackages.some((p) => p.code === subForm.plan)) {
+      setSubForm((f) => ({ ...f, plan: activePackages[0].code }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [packagesApi]);
+  // Inline editor for the expanded-card actions (plan / add-restaurant / modules).
+  const [subEdit, setSubEdit] = useState<{ kind: "plan" | "restaurant" | "modules"; sub: any } | null>(null);
   const { t, dir } = useLang();
   // Driven by GET /admin/subscriptions — mapped into the card render shape. No static seed.
   type SubCard = {
-    id:string; name:string; abbr:string; color:string; owner:string; plan:string;
-    subStatus:"active"|"warning"|"danger"|"expired"; expires:string; daysLeft:number;
+    id:string; brandId?:string; name:string; abbr:string; color:string; owner:string; plan:string;
+    subStatus:"active"|"warning"|"danger"|"expired"|"none"; hasSub:boolean; expires:string; daysLeft:number;
     monthlyPrice?:number; restaurants:any[]; modules:string[];
   };
   const [subs, setSubs] = useState<SubCard[]>([]);
   const [expandedSub, setExpandedSub] = useState<string|null>(null);
   const [autoReminders, setAutoReminders] = useState<Record<string,boolean>>({});
+  // Brand-first merge: EVERY brand the admin added (GET /admin/brands) shows here with
+  // its plan; a real subscription record (GET /admin/subscriptions) enriches it when one
+  // exists, otherwise the brand is shown as «بدون اشتراك» so it's never hidden.
   useEffect(() => {
-    if (!Array.isArray(apiSubs)) return;
-    // GET /admin/subscriptions returns brand-level rows carrying only
-    // {id, brandId, plan, status, expiresAt, ...}. The brand's identity, its
-    // restaurants→branches tree and its modules live on GET /admin/brands, so we
-    // join on brandId — otherwise the card renders «—», «0 فرع» and no modules.
-    const brandList = (Array.isArray(subBrandsApi) ? subBrandsApi : []) as any[];
-    const brandById = new Map(brandList.map((b:any)=>[b.id, b]));
-    const mapped: SubCard[] = apiSubs.map((s:any)=>{
-      const b = (s.brandId ? brandById.get(s.brandId) : undefined) ?? {};
-      const name = s.brandName ?? s.name ?? b.name ?? "—";
-      const rests = (Array.isArray(s.restaurants) && s.restaurants.length ? s.restaurants : b.restaurants) ?? [];
-      const mods  = (Array.isArray(s.modules) && s.modules.length ? s.modules : b.modules) ?? [];
-      return {
-        id: s.id,
-        name,
-        abbr: (b.abbr ?? name ?? "؟").toString().slice(0,2),
-        color: s.color ?? b.color ?? "#7C3AED",
-        owner: s.owner ?? s.ownerEmail ?? b.owner ?? b.ownerEmail ?? "",
-        plan: s.plan ?? b.plan ?? "",
-        subStatus: (s.status ?? "active") as SubCard["subStatus"],
-        expires: s.expiresAt ?? "",
-        daysLeft: s.daysLeft ?? 0,
-        monthlyPrice: s.monthlyPrice,
-        restaurants: rests,
-        modules: mods,
-      };
+    const brands = Array.isArray(subBrandsApi) ? (subBrandsApi as any[]) : [];
+    const subsArr = Array.isArray(apiSubs) ? (apiSubs as any[]) : [];
+    const subFor = (b:any) => subsArr.find((s:any)=> (s.brandId && s.brandId === b.id) || (s.brandName && s.brandName === b.name));
+    const cardFromSub = (s:any, brand?:any):SubCard => ({
+      id: s.id,
+      brandId: s.brandId ?? brand?.id,
+      name: s.brandName ?? brand?.name ?? s.name ?? "—",
+      abbr: (s.brandName ?? brand?.name ?? "؟").toString().slice(0,2),
+      color: brand?.color ?? s.color ?? "#7C3AED",
+      owner: brand?.owner ?? s.owner ?? s.ownerEmail ?? "",
+      plan: s.plan ?? brand?.plan ?? "—",
+      subStatus: (s.status ?? "active") as SubCard["subStatus"],
+      hasSub: true,
+      expires: s.expiresAt ?? "",
+      daysLeft: s.daysLeft ?? 0,
+      monthlyPrice: s.monthlyPrice,
+      restaurants: Array.isArray(brand?.restaurants) ? brand.restaurants : (Array.isArray(s.restaurants) ? s.restaurants : []),
+      modules: Array.isArray(s.modules) ? s.modules : (Array.isArray(brand?.modules) ? brand.modules : []),
     });
+    const cardFromBrand = (b:any):SubCard => ({
+      id: b.id,
+      brandId: b.id,
+      name: b.name ?? "—",
+      abbr: (b.name ?? "؟").toString().slice(0,2),
+      color: b.color ?? "#7C3AED",
+      owner: b.owner ?? b.ownerEmail ?? "",
+      plan: b.plan ?? "—",
+      subStatus: "none",
+      hasSub: false,
+      expires: "",
+      daysLeft: 0,
+      monthlyPrice: undefined,
+      restaurants: Array.isArray(b.restaurants) ? b.restaurants : [],
+      modules: Array.isArray(b.modules) ? b.modules : [],
+    });
+    let mapped: SubCard[];
+    if (brands.length > 0) {
+      mapped = brands.map((b:any)=>{ const s = subFor(b); return s ? cardFromSub(s, b) : cardFromBrand(b); });
+      // Keep any orphan subscriptions whose brand isn't in the brands list.
+      subsArr.forEach((s:any)=>{ if (!mapped.some(m=> (s.brandId && m.brandId === s.brandId) || m.name === s.brandName)) mapped.push(cardFromSub(s)); });
+    } else {
+      mapped = subsArr.map((s:any)=>cardFromSub(s));
+    }
     setSubs(mapped);
-    setAutoReminders(Object.fromEntries(apiSubs.map((s:any)=>[s.id, !!s.reminderEnabled])));
+    setAutoReminders(Object.fromEntries(subsArr.map((s:any)=>[s.id, !!s.reminderEnabled])));
   }, [apiSubs, subBrandsApi]);
-  const statusCls = { active:"border-emerald-200 bg-emerald-50/20",warning:"border-amber-200 bg-amber-50/20",danger:"border-red-200 bg-red-50/20",expired:"border-red-300 bg-red-50/30" };
-  const statusBadgeCls = { active:"bg-emerald-50 text-emerald-700",warning:"bg-amber-50 text-amber-700",danger:"bg-red-50 text-red-700",expired:"bg-red-100 text-red-800" };
-  const statusLabel = { active:t("اشتراك نشط","Active Subscription"),warning:t("ينتهي قريباً","Expiring Soon"),danger:t("إنذار انتهاء","Expiry Alert"),expired:t("منتهي الاشتراك","Subscription Expired") };
+  const statusCls = { active:"border-emerald-200 bg-emerald-50/20",warning:"border-amber-200 bg-amber-50/20",danger:"border-red-200 bg-red-50/20",expired:"border-red-300 bg-red-50/30",none:"border-gray-200 bg-gray-50/40" };
+  const statusBadgeCls = { active:"bg-emerald-50 text-emerald-700",warning:"bg-amber-50 text-amber-700",danger:"bg-red-50 text-red-700",expired:"bg-red-100 text-red-800",none:"bg-gray-100 text-gray-600" };
+  const statusLabel = { active:t("اشتراك نشط","Active Subscription"),warning:t("ينتهي قريباً","Expiring Soon"),danger:t("إنذار انتهاء","Expiry Alert"),expired:t("منتهي الاشتراك","Subscription Expired"),none:t("بدون اشتراك","No subscription") };
   const renew = (id:string) => {
     setSubs(p=>p.map(s=>s.id===id?{...s,subStatus:"active" as const,daysLeft:365,expires:"14 مارس 2027"}:s) as typeof subs);
     renewMut.mutate({ id });
@@ -11943,16 +12126,33 @@ function AdminSubscriptions({}: PageProps) {
                 </select></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الباقة","Plan")}</label>
-                  <select value={subForm.plan} onChange={e=>setSubForm(f=>({...f,plan:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>فضي</option><option>ذهبي</option><option>بلاتيني</option></select></div>
+                  <select value={subForm.plan} onChange={e=>setSubForm(f=>({...f,plan:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400">
+                    {activePackages.length
+                      ? activePackages.map(p=><option key={p.id} value={p.code}>{p.name}</option>)
+                      : <option value="">{t("لا توجد باقات — أضف باقة أولاً","No packages — add one first")}</option>}
+                  </select></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("عدد الأشهر","Months")}</label><input type="number" min={1} max={36} value={subForm.months} onChange={e=>setSubForm(f=>({...f,months:Number(e.target.value)||1}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
               </div>
               <div className="flex gap-2 justify-end pt-1">
                 <Btn onClick={()=>setShowAddSub(false)}>{t("إلغاء","Cancel")}</Btn>
-                <Btn variant="primary" disabled={!subForm.brandId||createSubMut.isPending} onClick={()=>{ createSubMut.mutate({ brandId:subForm.brandId, plan:planKey(subForm.plan), months:subForm.months }, { onSuccess:()=>{ setShowAddSub(false); setSubForm({brandId:"",plan:"فضي",months:12}); } }); }}><Plus size={13}/> {t("إنشاء","Create")}</Btn>
+                <Btn variant="primary" disabled={!subForm.brandId||!subForm.plan||createSubMut.isPending} onClick={()=>{ createSubMut.mutate({ brandId:subForm.brandId, plan:subForm.plan, months:subForm.months }, { onSuccess:()=>{ setShowAddSub(false); setSubForm({brandId:"",plan:activePackages[0]?.code??"",months:12}); } }); }}><Plus size={13}/> {t("إنشاء","Create")}</Btn>
               </div>
             </div>
           </div>
         </div>
+      )}
+
+      {subEdit && (
+        <SubEditModal
+          edit={subEdit}
+          packages={activePackages}
+          moduleOptions={moduleOptions}
+          pending={changePlanMut.isPending || createRestMut.isPending || updateSubModulesMut.isPending}
+          onClose={()=>setSubEdit(null)}
+          changePlan={(id, plan)=>changePlanMut.mutate({ id, plan }, { onSuccess:()=>setSubEdit(null) })}
+          addRestaurant={(brandId, name, city)=>createRestMut.mutate({ brandId, name, city }, { onSuccess:()=>setSubEdit(null) })}
+          saveModules={(id, modules)=>updateSubModulesMut.mutate({ id, modules }, { onSuccess:()=>setSubEdit(null) })}
+        />
       )}
 
       {/* Summary KPIs */}
@@ -12004,10 +12204,17 @@ function AdminSubscriptions({}: PageProps) {
                     </button>
                     <span className="text-[10px] text-gray-500">{t("تذكير تلقائي","Auto Reminder")}</span>
                   </div>
-                  <button onClick={()=>renew(sub.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${sub.subStatus==="expired"?"bg-red-600 text-white hover:bg-red-700":"bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"}`}>
-                    {sub.subStatus==="expired"?t("تفعيل","Activate"):t("تجديد","Renew")}
-                  </button>
+                  {sub.hasSub ? (
+                    <button onClick={()=>renew(sub.id)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${sub.subStatus==="expired"?"bg-red-600 text-white hover:bg-red-700":"bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200"}`}>
+                      {sub.subStatus==="expired"?t("تفعيل","Activate"):t("تجديد","Renew")}
+                    </button>
+                  ) : (
+                    <button onClick={()=>{ setSubForm(f=>({...f, brandId: sub.brandId ?? "" })); setShowAddSub(true); }}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-purple-600 text-white hover:bg-purple-700">
+                      {t("إنشاء اشتراك","Create subscription")}
+                    </button>
+                  )}
                   <button onClick={()=>setExpandedSub(isExp?null:sub.id)}
                     className="p-1.5 rounded-lg hover:bg-gray-100">
                     <ChevronDown size={14} className={`text-gray-400 transition-transform ${isExp?"rotate-180":""}`}/>
@@ -12046,9 +12253,13 @@ function AdminSubscriptions({}: PageProps) {
                     </div>
                   </div>
                   <div className="flex gap-2 pt-1">
-                    <Btn size="sm">{t("تعديل الباقة","Edit Plan")}</Btn>
-                    <Btn size="sm" variant="ghost">{t("إضافة مطعم","Add Restaurant")}</Btn>
-                    <Btn size="sm" variant="ghost" onClick={()=>{ setModulesFor({ id: sub.id, name: sub.name }); setModulesDraft(sub.modules ?? []); }}>{t("تعديل الموديولات","Edit Modules")}</Btn>
+                    {sub.hasSub && (
+                      <Btn size="sm" onClick={()=>setSubEdit({ kind:"plan", sub })}>{t("تعديل الباقة","Edit Plan")}</Btn>
+                    )}
+                    <Btn size="sm" variant="ghost" onClick={()=>setSubEdit({ kind:"restaurant", sub })} disabled={!sub.brandId}>{t("إضافة مطعم","Add Restaurant")}</Btn>
+                    {sub.hasSub && (
+                      <Btn size="sm" variant="ghost" onClick={()=>setSubEdit({ kind:"modules", sub })}>{t("تعديل الموديولات","Edit Modules")}</Btn>
+                    )}
                   </div>
                 </div>
               )}
@@ -12057,42 +12268,6 @@ function AdminSubscriptions({}: PageProps) {
         })}
       </div>
 
-      {/* Edit the subscription's active modules (PATCH .../modules). */}
-      {modulesFor && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={()=>setModulesFor(null)} dir={dir}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5" onClick={e=>e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold text-gray-800">{t("تعديل الموديولات","Edit Modules")} — {modulesFor.name}</h3>
-              <button onClick={()=>setModulesFor(null)} className="text-gray-400"><X size={18}/></button>
-            </div>
-            {moduleOptions.length===0
-              ? <p className="text-sm text-gray-400 py-6 text-center">{t("لا توجد موديولات متاحة","No modules available")}</p>
-              : <div className="grid grid-cols-2 gap-2 max-h-72 overflow-y-auto">
-                  {moduleOptions.map((m:any,mi:number)=>{
-                    const key = m.value ?? m.key ?? m.id ?? String(m);
-                    const label = m.labelAr ?? m.label ?? m.name ?? key;
-                    const on = modulesDraft.includes(key);
-                    return (
-                      <label key={key||mi} className={`flex items-center gap-2 px-3 py-2 rounded-lg border cursor-pointer text-sm ${on?"border-purple-300 bg-purple-50 text-purple-800":"border-gray-200 text-gray-600"}`}>
-                        <input type="checkbox" checked={on} className="sr-only"
-                          onChange={()=>setModulesDraft(p=>p.includes(key)?p.filter(x=>x!==key):[...p,key])}/>
-                        {on && <CheckCircle2 size={13} className="text-purple-500 flex-shrink-0"/>}
-                        <span className="truncate">{label}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-            }
-            <div className="flex gap-2 justify-end pt-4">
-              <Btn size="sm" onClick={()=>setModulesFor(null)}>{t("إلغاء","Cancel")}</Btn>
-              <Btn size="sm" variant="primary" disabled={updateModulesMut.isPending}
-                onClick={()=>updateModulesMut.mutate({ id: modulesFor.id, modules: modulesDraft }, { onSuccess:()=>setModulesFor(null) })}>
-                <CheckCircle2 size={12}/> {t("حفظ","Save")}
-              </Btn>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -15264,14 +15439,21 @@ function SupReports({}: PageProps) {
 // MAIN EXPORT
 // ════════════════════════════════════════════════════════════
 export function ASABPrototype() {
-  // Seed from the language picked on the pre-login entry screen, and persist any
-  // in-app change so it survives navigation/reload.
-  const [lang, setLangState] = useState<Lang>(() => readAppLang() as Lang);
-  const setLang = (l: Lang) => { setLangState(l); writeAppLang(l as AppLang); };
+  // Seed from the site-wide language chosen on the entry screen, and keep them in sync.
+  const [lang, setLangState] = useState<Lang>(() => getSiteLang());
+  const setLang = (l: Lang) => { setSiteLang(l); setLangState(l); };
   const t = <T,>(ar: T, en: T): T => lang === "ar" ? ar : en;
   const dir = lang === "ar" ? "rtl" : "ltr";
 
-  const [appState, setAppState] = useState<AppState>({ role:null, page:"", detailId:null, modal:null });
+  // Seed the role synchronously from the pre-login entry pick so we never flash the
+  // legacy in-mockup role picker for a frame before adopting it.
+  const [appState, setAppState] = useState<AppState>(() => {
+    const sel = readEntrySelection();
+    if (sel?.slug === "asab/ASABPrototype" && sel.role && (sel.role in ROLE_PROFILES)) {
+      return { role: sel.role as RoleId, page: ROLE_PROFILES[sel.role as RoleId].defaultPage, detailId: null, modal: null };
+    }
+    return { role: null, page: "", detailId: null, modal: null };
+  });
   // Live operations from platform API — falls back to INITIAL_OPS when API returns empty.
   // Local setOps is preserved to drive optimistic UI for approve / reject / final-approve / ERP mutations.
   const isHead = appState.role === "head";

@@ -43,9 +43,10 @@ import {
 } from "../keys";
 
 // ─── Overview ────────────────────────────────────────────────────────────────
-export function useAdminOverview() {
+export function useAdminOverview(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminOverview,
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<PlatformAdminOverview>("/admin/overview");
       return res.data;
@@ -55,9 +56,10 @@ export function useAdminOverview() {
 }
 
 // ─── Companies ───────────────────────────────────────────────────────────────
-export function useAdminCompanies(filter: AdminCompaniesFilter = {}) {
+export function useAdminCompanies(filter: AdminCompaniesFilter = {}, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminCompanies(filter),
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<Page<AdminCompany> | AdminCompany[]>(
         "/admin/companies",
@@ -584,9 +586,10 @@ export function useDeleteAdminBranch() {
 }
 
 // ─── Users ───────────────────────────────────────────────────────────────────
-export function useAdminUsers(filter: AdminUsersFilter = {}) {
+export function useAdminUsers(filter: AdminUsersFilter = {}, opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformAdminUsers(filter),
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<Page<AdminUserRow> | AdminUserRow[]>(
         "/admin/users",
@@ -774,6 +777,41 @@ export function useDeactivateAdminUser() {
   });
 }
 
+// ─── Suppliers (admin-scoped picker for role=supplier user create) ────────────
+export interface AdminSupplierRow {
+  id: string;
+  name: string;
+  contactEmail: string | null;
+  companyId?: string;
+  status?: string;
+  /** true when a login already exists — picking it would 422 SUPPLIER_LOGIN_AMBIGUOUS. */
+  hasLogin?: boolean;
+}
+export interface AdminSuppliersFilter {
+  companyId?: string;
+  search?: string;
+  status?: string;
+  page?: number;
+  pageSize?: number;
+}
+export function useAdminSuppliers(
+  filter: AdminSuppliersFilter = {},
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "suppliers", filter] as const,
+    enabled: opts.enabled,
+    queryFn: async () => {
+      const res = await api.get<Page<AdminSupplierRow> | AdminSupplierRow[]>(
+        "/admin/suppliers",
+        { params: filter },
+      );
+      const d = res.data as Page<AdminSupplierRow> | AdminSupplierRow[];
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+  });
+}
+
 // ─── Distribution ────────────────────────────────────────────────────────────
 export function useAdminDistribution() {
   return useQuery({
@@ -951,64 +989,6 @@ export function useRenewSubscription() {
   });
 }
 
-// ─── Suppliers (admin-side twin of /company/me/suppliers) ────────────────────
-// A platform admin gets 403 WRONG_ROLE on the company endpoint, so this is the
-// cross-tenant list. `companyId` omitted = every company. A supplier with
-// companyId null is a PLATFORM supplier: shared across companies and not
-// editable by a company admin.
-export interface AdminSupplierRow {
-  id: string;
-  name: string;
-  contactEmail: string | null; // null → can never get a login
-  companyId: string | null; // null → platform/shared supplier
-  status?: string;
-  hasLogin?: boolean; // true → creating another login is ambiguous
-}
-
-export function useAdminSuppliers(
-  filter: {
-    companyId?: string;
-    search?: string;
-    status?: string;
-    page?: number;
-    pageSize?: number;
-  } = {},
-) {
-  return useQuery({
-    queryKey: ["platform", "admin", "suppliers", { filter }],
-    queryFn: async () => {
-      const res = await api.get<Page<AdminSupplierRow> | AdminSupplierRow[]>(
-        "/admin/suppliers",
-        { params: filter },
-      );
-      const d = res.data as Page<AdminSupplierRow> | AdminSupplierRow[];
-      return Array.isArray(d) ? d : (d.data ?? []);
-    },
-    staleTime: 30_000,
-  });
-}
-
-// PATCH /admin/subscriptions/{id}/modules — returns the updated subscription.
-// Module strings are NOT validated against a catalog server-side, so send keys
-// from GET /admin/lookups/modules; a typo would be stored verbatim.
-export function useUpdateSubscriptionModules() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ id, modules }: { id: string; modules: string[] }) => {
-      const res = await api.patch<AdminSubscription>(
-        `/admin/subscriptions/${id}/modules`,
-        { modules },
-      );
-      return res.data;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["platform", "admin", "subscriptions"] });
-      toast.success("تم تحديث الموديولات");
-    },
-    onError: (e) => toast.error(getErrorMessage(e, "ar")),
-  });
-}
-
 export function useChangeSubscriptionPlan() {
   const qc = useQueryClient();
   return useMutation({
@@ -1030,6 +1010,28 @@ export function useChangeSubscriptionPlan() {
         queryKey: ["platform", "admin", "subscriptions"],
       });
       toast.success("تم تغيير الخطة");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Update the modules enabled on a subscription — PATCH /admin/subscriptions/{id}/modules. */
+export function useUpdateSubscriptionModules() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, modules }: { id: string; modules: string[] }) => {
+      const res = await api.patch<AdminSubscription>(
+        `/admin/subscriptions/${id}/modules`,
+        { modules },
+      );
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ["platform", "admin", "subscriptions"],
+      });
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
+      toast.success("تم تحديث الموديولات");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

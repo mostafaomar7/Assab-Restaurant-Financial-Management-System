@@ -25,7 +25,9 @@ const CSS = `
 .asab-blob{position:absolute;border-radius:50%;filter:blur(64px);pointer-events:none;will-change:transform;}
 .asab-blob--a{animation:asabFloat 19s ease-in-out infinite;}
 .asab-blob--b{animation:asabFloat2 24s ease-in-out infinite;}
-.asab-content{flex:1;display:flex;align-items:center;justify-content:center;padding:48px 40px;background:${G[50]};}
+.asab-content{position:relative;flex:1;display:flex;align-items:center;justify-content:center;padding:48px 40px;background:${G[50]};}
+.asab-langslot{position:absolute;top:22px;inset-inline-end:32px;z-index:5;}
+@media (max-width:900px){.asab-langslot{top:14px;inset-inline-end:16px;}}
 .asab-stage{width:100%;max-width:560px;animation:asabIn .5s cubic-bezier(.22,1,.36,1);}
 .asab-card{cursor:pointer;background:#fff;border:1.5px solid ${G[200]};border-radius:18px;
   transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;text-align:start;font-family:inherit;width:100%;}
