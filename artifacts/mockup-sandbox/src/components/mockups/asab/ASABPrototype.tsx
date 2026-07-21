@@ -14031,21 +14031,27 @@ function BranchUpload({}: PageProps) {
   const statusOf = (type: string) => reports.find((r) => r.id === type || r.type === type);
   const isDone = (type: string) => sent[type] || statusOf(type)?.uploadedToday || statusOf(type)?.lastStatus === "success";
 
-  const submitSales = () => {
+  const submitSales = async () => {
     if (!salesAmt.trim()) { toast.error(t("أدخل قيمة المبيعات أولاً","Enter the sales amount first")); return; }
-    uploadMut.mutate(
-      {
+    try {
+      // Sales and expenses are SEPARATE report types on the backend (each has its own
+      // checklist entry), so submit them as two operations rather than one bundled call.
+      await uploadMut.mutateAsync({
         reportType: "sales", date: today,
         salesHalalas: Math.round((parseFloat(salesAmt) || 0) * 100), shift,
-        expensesHalalas: expAmt ? Math.round((parseFloat(expAmt) || 0) * 100) : undefined,
-        expenseNote: expenseNote || undefined,
         file: salesFile ?? undefined,
-      },
-      { onSuccess: () => {
-        setSent((p) => ({ ...p, sales: true, ...(expAmt ? { expenses: true } : {}) }));
-        setSalesAmt(""); setExpAmt(""); setExpenseNote(""); setSalesFile(null);
-      } },
-    );
+      });
+      setSent((p) => ({ ...p, sales: true }));
+      if (expAmt.trim()) {
+        await uploadMut.mutateAsync({
+          reportType: "expenses", date: today,
+          expensesHalalas: Math.round((parseFloat(expAmt) || 0) * 100),
+          expenseNote: expenseNote || undefined,
+        });
+        setSent((p) => ({ ...p, expenses: true }));
+      }
+      setSalesAmt(""); setExpAmt(""); setExpenseNote(""); setSalesFile(null);
+    } catch { /* the hook's onError already surfaced the message */ }
   };
   const submitFile = (reportType: string, file: File | null) => {
     uploadMut.mutate(
