@@ -10164,38 +10164,45 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   const branchParent = useMemo(() => {
     const byBranch = new Map<string, { restaurant: string; brand: string }>();
     const byRestaurant = new Map<string, string>();
+    // id → display name, so assigned ids (which is what the API stores) render as names.
+    const branchName = new Map<string, string>();
+    const restName = new Map<string, string>();
     const tree = Array.isArray(brandsTreeApi) ? (brandsTreeApi as any[]) : [];
     for (const b of tree) {
       const brandName = b?.name ?? "";
       for (const r of (b?.restaurants ?? [])) {
-        const restName = r?.name ?? "";
-        if (r?.id) byRestaurant.set(String(r.id), brandName);
-        if (restName) byRestaurant.set(restName, brandName);
+        const rName = r?.name ?? "";
+        if (r?.id) { byRestaurant.set(String(r.id), brandName); restName.set(String(r.id), rName); }
+        if (rName) byRestaurant.set(rName, brandName);
         for (const br of (r?.branches ?? [])) {
           const brName = typeof br === "string" ? br : (br?.name ?? "");
           const brId = typeof br === "string" ? "" : (br?.id ?? "");
-          const val = { restaurant: restName, brand: brandName };
-          if (brId) byBranch.set(String(brId), val);
+          const val = { restaurant: rName, brand: brandName };
+          if (brId) { byBranch.set(String(brId), val); branchName.set(String(brId), brName); }
           if (brName) byBranch.set(brName, val);
         }
       }
     }
-    return { byBranch, byRestaurant };
+    return { byBranch, byRestaurant, branchName, restName };
   }, [brandsTreeApi]);
 
-  // Fill in the empty brand/restaurant levels for a user from its assigned branch(es).
+  // Fill in the empty brand/restaurant levels for a user from its assigned branch(es),
+  // and resolve stored ids to display names (the API stores ids, not names).
   const derivePath = (u: AdminUserData) => {
     let brands = [...(u.brands ?? [])];
+    const branchesRaw = u.branches ?? [];
     let restaurants = [...(u.restaurants ?? [])];
-    const branches = u.branches ?? [];
-    if (restaurants.length === 0 && branches.length > 0) {
-      restaurants = Array.from(new Set(branches.map(b => branchParent.byBranch.get(b)?.restaurant).filter(Boolean) as string[]));
+    if (restaurants.length === 0 && branchesRaw.length > 0) {
+      restaurants = Array.from(new Set(branchesRaw.map(b => branchParent.byBranch.get(b)?.restaurant).filter(Boolean) as string[]));
     }
     if (brands.length === 0) {
-      const fromBranches = branches.map(b => branchParent.byBranch.get(b)?.brand).filter(Boolean) as string[];
+      const fromBranches = branchesRaw.map(b => branchParent.byBranch.get(b)?.brand).filter(Boolean) as string[];
       const fromRests = restaurants.map(r => branchParent.byRestaurant.get(r)).filter(Boolean) as string[];
       brands = Array.from(new Set([...fromBranches, ...fromRests]));
     }
+    // Map any leftover ids to names (a value already being a name passes through).
+    const branches = branchesRaw.map(b => branchParent.branchName.get(b) ?? b);
+    restaurants = restaurants.map(r => branchParent.restName.get(r) ?? r);
     return { brands, restaurants, branches };
   };
   const importFileRef = useRef<HTMLInputElement>(null);
