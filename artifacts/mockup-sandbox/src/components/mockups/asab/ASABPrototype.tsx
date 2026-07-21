@@ -1287,17 +1287,12 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const { data: headsApi } = useAdminUsers({ roleFilter: "head" });
   const headOptions = ((Array.isArray(headsApi) ? headsApi : (headsApi as any)?.data ?? []) as any[])
     .map((h:any)=>({ id: h.id, name: h.name }));
-  // Branch managers need a company + exactly one branch (BRANCH_NOT_IN_COMPANY otherwise).
-  const { data: companiesApiU } = useAdminCompanies();
-  const companyOptionsU = (((companiesApiU as any)?.data ?? companiesApiU ?? []) as any[]);
-  const [companyId, setCompanyId] = useState("");
-
   // Brands/restaurants/branches come from the API (GET /admin/brands), not a static catalog.
   const { data: brandsApi } = useAdminBrands();
   // Selections are stored as IDs — the endpoint wants UUIDs, and sending display
   // names was a guaranteed 422 (BRANCH_NOT_IN_COMPANY / invalid brand id).
   const brandList = (Array.isArray(brandsApi) ? brandsApi : []).map((b:any)=>({
-    id: b.id, name: b.name, color: b.color ?? "#7C3AED",
+    id: b.id, name: b.name, color: b.color ?? "#7C3AED", companyId: b.companyId as string|undefined,
     abbr: b.abbr ?? (typeof b.name === "string" ? b.name.slice(0,2) : "؟"),
     restaurants: (b.restaurants ?? []).map((r:any)=>({
       id: r.id, name: r.name,
@@ -1307,6 +1302,9 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const availableRests = brandList.filter(b=>selBrands.includes(b.id)).flatMap(b=>b.restaurants);
   const availableBranches = availableRests.filter(r=>selRests.includes(r.id)).flatMap(r=>r.branches);
   const brandNameById = new Map(brandList.map(b=>[b.id, b.name]));
+  // A branch manager provisions a mobile login that fails closed without a company.
+  // The company is the one the picked brand belongs to — derived, not chosen separately.
+  const selectedBrandCompanyId = brandList.find(b=>selBrands.includes(b.id))?.companyId;
 
   const scopeFor = (): AdminUserData["scope"] => {
     if(selBranches.length>0) return "branch";
@@ -1333,12 +1331,12 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   const canNext0 = name.trim()!=="";
   // Per-role scope rules (backend-enforced):
   //  • admin / procurement / supplier → no scope at all (admin is forced to "all")
-  //  • branch  → a company AND exactly one branch (else 422 BRANCH_NOT_IN_COMPANY)
+  //  • branch  → a brand + exactly one branch (the company is derived from the brand)
   //  • accountant / head → at least one brand
   const canNext1 = isScopeless
     ? true
     : isBranchManager
-      ? Boolean(companyId) && selBranches.length === 1
+      ? selBrands.length === 1 && selBranches.length === 1
       : selBrands.length > 0;
 
   return (
@@ -1409,23 +1407,18 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   </p>
                 </div>
               : <>
-                {/* A branch manager provisions a mobile login, which fails closed
-                    without a company; the branch must belong to that company. */}
-                {isBranchManager && (
-                  <div>
-                    <label className="text-xs font-semibold text-gray-600 block mb-2">{t("الشركة","Company")} <span className="text-red-500">*</span></label>
-                    <select value={companyId} onChange={e=>{ setCompanyId(e.target.value); setSelBrands([]); setSelRests([]); setSelBranches([]); }} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-                      <option value="">{t("— اختر الشركة —","— Select company —")}</option>
-                      {companyOptionsU.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
-                    </select>
-                  </div>
-                )}
                 <div>
-                  <label className="text-xs font-semibold text-gray-600 block mb-2">{t("تخصيص العلامات التجارية","Assign Brands")} <span className="text-red-500">*</span></label>
+                  <label className="text-xs font-semibold text-gray-600 block mb-2">
+                    {isBranchManager ? t("اختر العلامة التجارية (واحدة)","Select Brand (one)") : t("تخصيص العلامات التجارية","Assign Brands")}
+                    <span className="text-red-500"> *</span>
+                  </label>
+                  {/* The company is derived from the brand — a branch manager picks one
+                      brand, which resolves the company automatically at submit. */}
                   <div className="grid grid-cols-2 gap-2">
                     {brandList.map(b=>(
                       <label key={b.id} className={`flex items-center gap-3 p-3 rounded-xl border-2 cursor-pointer transition-all ${selBrands.includes(b.id)?"border-purple-400 bg-purple-50":"border-gray-100 hover:border-gray-300"}`}>
-                        <input type="checkbox" checked={selBrands.includes(b.id)} onChange={()=>{ toggleArr(selBrands,b.id,setSelBrands); setSelRests([]); setSelBranches([]); }} className="sr-only"/>
+                        <input type="checkbox" checked={selBrands.includes(b.id)}
+                          onChange={()=>{ if(isBranchManager){ setSelBrands([b.id]); } else { toggleArr(selBrands,b.id,setSelBrands); } setSelRests([]); setSelBranches([]); }} className="sr-only"/>
                         <div className="w-8 h-8 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0" style={{background:b.color}}>{b.abbr}</div>
                         <span className="text-sm font-semibold text-gray-700">{b.name}</span>
                         {selBrands.includes(b.id) && <CheckCircle2 size={14} className="text-purple-500 mr-auto"/>}
@@ -1544,7 +1537,8 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   brands:isScopeless?[]:selBrands,
                   restaurants:isScopeless?[]:selRests,
                   branches:isScopeless?[]:selBranches,
-                  modules:selModules, reportsTo, companyId: companyId || undefined,
+                  // Branch managers carry the company of their picked brand (derived).
+                  modules:selModules, reportsTo, companyId: isBranchManager ? (selectedBrandCompanyId || undefined) : undefined,
                   scope:isScopeless?"all":scopeFor(), status:"active" });
               }} className="px-6 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">
                 ✓ {t("إضافة المستخدم","Add User")}
