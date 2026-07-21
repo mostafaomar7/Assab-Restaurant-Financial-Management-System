@@ -14868,24 +14868,40 @@ function BranchSettings({ navigate }:PageProps) {
   const { data: apiSettings } = useBranchSettingsPlatform();
   const updateSettingsMut = useUpdateBranchSettingsPlatform();
   const [saved, setSaved] = useState(false);
+  // Empty defaults — every value comes from GET /company/me/branch/settings, so the
+  // form reflects real data and shows saved edits after a reload (no fake seed).
   const [form, setForm] = useState({
-    branchName:"فرع الرياض - العليا", manager:"أحمد الشمري",
-    phone:"0112456789", address:"الرياض — حي العليا، شارع العروبة",
-    openTime:"08:00", closeTime:"23:00", shiftDuration:"8",
-    taxNumber:"310012345600003", bankAccount:"SA1234567890123456789012",
-    cashLimit:"5000", wasteThreshold:"3", autoReminders:true, requireImages:true
+    branchName:"", manager:"",
+    phone:"", address:"",
+    openTime:"", closeTime:"", shiftDuration:"",
+    taxNumber:"", bankAccount:"",
+    cashLimit:"", wasteThreshold:"", autoReminders:false, requireImages:false
   });
   // branchName / phone / address are owned by the admin record now — the backend
   // ignores edits to them. Lock whatever it reports (default to those three).
   const readOnlyFields = new Set(apiSettings?.readOnlyFields ?? ["branchName","phone","address"]);
-  // Seed the display-only fields from the admin record when it arrives.
+  // Seed EVERY field from the settings payload (read defensively — the contract is
+  // loosely typed). Editable fields must be seeded too, or edits appear not to persist.
   useEffect(() => {
     if (!apiSettings) return;
+    const s = apiSettings as any;
+    const cashLimitSar = s.cashLimitHalalas != null ? String(Math.round(s.cashLimitHalalas / 100))
+      : s.cashAlertThreshold != null ? String(s.cashAlertThreshold) : "";
     setForm(p => ({
       ...p,
-      branchName: apiSettings.branchName ?? p.branchName,
-      phone: apiSettings.phone ?? p.phone,
-      address: apiSettings.address ?? p.address,
+      branchName: s.branchName ?? p.branchName,
+      manager: s.manager ?? s.managerName ?? p.manager,
+      phone: s.phone ?? p.phone,
+      address: s.address ?? p.address,
+      openTime: s.workingHours?.open ?? s.openTime ?? p.openTime,
+      closeTime: s.workingHours?.close ?? s.closeTime ?? p.closeTime,
+      shiftDuration: s.shiftDurationHours != null ? String(s.shiftDurationHours) : (s.shiftDuration ?? p.shiftDuration),
+      taxNumber: s.taxNumber ?? s.vatNumber ?? p.taxNumber,
+      bankAccount: s.bankAccount ?? s.iban ?? p.bankAccount,
+      cashLimit: cashLimitSar || p.cashLimit,
+      wasteThreshold: s.wasteThreshold != null ? String(s.wasteThreshold) : p.wasteThreshold,
+      autoReminders: s.autoReminders ?? s.notificationPrefs?.newReminders ?? p.autoReminders,
+      requireImages: s.requireImages ?? p.requireImages,
     }));
   }, [apiSettings]);
   // T12 §8 — shift timings are admin-owned (read-only); default locked.
@@ -14933,9 +14949,16 @@ function BranchSettings({ navigate }:PageProps) {
                   className={`w-full text-sm border rounded-lg px-3 py-2 outline-none ${shiftLocked?"border-gray-100 bg-gray-50 text-gray-400 cursor-not-allowed":"border-gray-200 focus:border-purple-300"}`}/>
               </div>
             ))}
-            <div className="bg-blue-50 rounded-xl p-3">
-              <p className="text-xs text-blue-700 font-medium">⏱ {t("ساعات العمل اليومية:","Daily working hours:")} <strong>{(parseInt(form.closeTime)-parseInt(form.openTime))} {t("ساعة","hrs")}</strong> · {Math.floor((parseInt(form.closeTime)-parseInt(form.openTime))/parseInt(form.shiftDuration))} {t("شفتات","shifts")}</p>
-            </div>
+            {(() => {
+              const openH = parseInt(form.openTime), closeH = parseInt(form.closeTime), dur = parseInt(form.shiftDuration);
+              if (!Number.isFinite(openH) || !Number.isFinite(closeH)) return null;
+              const hrs = closeH - openH;
+              return (
+                <div className="bg-blue-50 rounded-xl p-3">
+                  <p className="text-xs text-blue-700 font-medium">⏱ {t("ساعات العمل اليومية:","Daily working hours:")} <strong>{hrs} {t("ساعة","hrs")}</strong>{Number.isFinite(dur) && dur>0 ? ` · ${Math.floor(hrs/dur)} ${t("شفتات","shifts")}` : ""}</p>
+                </div>
+              );
+            })()}
           </div>
         </Card>
         <Card title={`💳 ${t("البيانات المالية والضريبية","Financial & Tax Information")}`}>
