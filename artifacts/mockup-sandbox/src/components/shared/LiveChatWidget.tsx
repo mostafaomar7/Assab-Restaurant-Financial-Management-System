@@ -50,8 +50,15 @@ export function LiveChatWidget({ t = (ar) => ar }: Props) {
   const handleOpen = async () => {
     setOpen(true);
     if (!sessionId) {
-      const res = await startMut.mutateAsync();
-      setSessionId(res.sessionId);
+      try {
+        const res = await startMut.mutateAsync();
+        setSessionId(res.sessionId);
+      } catch {
+        // Start failed (e.g. 403 for a role without support access). The hook's
+        // onError already toasts — just close the panel instead of hanging on
+        // "Connecting…" (and don't let the rejection reach the error overlay).
+        setOpen(false);
+      }
     }
   };
 

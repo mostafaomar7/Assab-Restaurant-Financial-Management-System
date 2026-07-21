@@ -15812,8 +15812,9 @@ export function ASABPrototype() {
           returnForReview={returnForReview} addCorrectiveOp={addCorrectiveOp} markErpPosted={markErpPosted}
           navigate={navigate} logout={logout} setModal={setModal} setDetailId={setDetailId}
         />
-        {/* Floating live-support chat — available across the whole shell. */}
-        <LiveChatWidget t={t}/>
+        {/* Floating live-support chat. It targets the company-scoped support queue,
+            so the platform admin (the support side, not a customer) doesn't get it. */}
+        {appState.role !== "admin" && <LiveChatWidget t={t}/>}
       </AssetDraftProvider>
     </LangContext.Provider>
   );
