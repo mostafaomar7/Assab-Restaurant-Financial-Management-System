@@ -13979,8 +13979,18 @@ function BranchUpload({}: PageProps) {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-bold text-gray-800">{t("رفع البيانات اليومية","Daily Data Upload")}</h2>
-        <span className="text-sm text-gray-400">{t("التاريخ: 14 أكتوبر 2025","Date: 14 October 2025")}</span>
+        <span className="text-sm text-gray-400">{new Date().toLocaleDateString("ar-SA")}</span>
       </div>
+
+      {/* The daily checklist is served by GET /company/me/branch/upload/status. Until it
+          returns rows the page has nothing to render — show why instead of a blank screen. */}
+      {reports.length===0 && (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10 text-center">
+          <Upload size={26} className="text-gray-300 mx-auto mb-3"/>
+          <p className="text-sm font-semibold text-gray-600">{t("لا توجد تقارير مطلوبة اليوم","No reports required today")}</p>
+          <p className="text-xs text-gray-400 mt-1 max-w-md mx-auto">{t("يرفع مدير الفرع بياناته اليومية من تطبيق الجوال. تظهر هنا قائمة التقارير وحالتها بمجرد أن يوفّرها النظام لهذا الفرع.","The branch manager uploads daily data from the mobile app. The report checklist and its status appear here once the system provides them for this branch.")}</p>
+        </div>
+      )}
 
       {dueToday.length>0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
