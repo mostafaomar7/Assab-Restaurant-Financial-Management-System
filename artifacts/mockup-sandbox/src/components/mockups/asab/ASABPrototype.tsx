@@ -14941,12 +14941,15 @@ function BranchSettings({ navigate }:PageProps) {
   // PUT /company/me/branch/settings — only the editable fields (identity + shift
   // timings are silently ignored server-side, so we don't send them).
   const save = () => {
-    updateSettingsMut.mutate({
-      manager:form.manager,
-      taxNumber:form.taxNumber, bankAccount:form.bankAccount,
-      cashLimitHalalas: Math.round((parseFloat(form.cashLimit)||0)*100),
-      wasteThreshold:form.wasteThreshold, autoReminders:form.autoReminders, requireImages:form.requireImages,
-    } as any, { onSuccess: ()=>{ setSaved(true); setTimeout(()=>setSaved(false),2500); } });
+    // Only send fields that actually have a value — sending null for an empty text
+    // field would wipe an existing value on the server. Toggles are always explicit.
+    const patch: any = { autoReminders: form.autoReminders, requireImages: form.requireImages };
+    if (form.manager.trim())        patch.manager = form.manager.trim();
+    if (form.taxNumber.trim())      patch.taxNumber = form.taxNumber.trim();
+    if (form.bankAccount.trim())    patch.bankAccount = form.bankAccount.trim();
+    if (form.wasteThreshold !== "") patch.wasteThreshold = Number(form.wasteThreshold);
+    if (form.cashLimit !== "")      patch.cashLimitHalalas = Math.round((parseFloat(form.cashLimit)||0)*100);
+    updateSettingsMut.mutate(patch, { onSuccess: ()=>{ setSaved(true); setTimeout(()=>setSaved(false),2500); } });
   };
 
   return (
