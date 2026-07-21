@@ -11259,7 +11259,12 @@ function AdminRestaurants({}: PageProps) {
 
         // per-restaurant employee upload state
         const empKey = (rid:string) => `${uploadBrand}_${rid}`;
-        const restEmpDone = (rid:string) => brandUploads[empKey(rid)]?.employees ?? false;
+        // Persisted status comes from the brand upload-status maps (keyed by
+        // restaurant/branch id) when the backend returns them; otherwise it falls
+        // back to the in-session optimistic flip. No per-row request either way.
+        const apiEmpDone    = ((brandUploadStatus as any)?.employees ?? {}) as Record<string,boolean>;
+        const apiAssetsDone = ((brandUploadStatus as any)?.assets ?? {}) as Record<string,boolean>;
+        const restEmpDone = (rid:string) => Boolean(apiEmpDone[rid]) || (brandUploads[empKey(rid)]?.employees ?? false);
         const setRestEmp  = (rid:string) => setUploaded(empKey(rid),"employees");
 
         // Renders EMPTY_FILE / INVALID_HEADER (expected vs received) and per-row errors.
@@ -11501,7 +11506,7 @@ function AdminRestaurants({}: PageProps) {
                     // old index-based key broke as soon as branches reordered.
                     const branchId = typeof br === "string" ? "" : (br?.id ?? "");
                     const aKey = branchId || `${uploadBrand}_${rest.id}_${bi}`;
-                    const done = branchAssets[aKey]??false;
+                    const done = Boolean(branchId && apiAssetsDone[branchId]) || (branchAssets[aKey]??false);
                     const errKey = `asset_${aKey}`;
                     return (
                       <div key={aKey} className="border-b border-gray-50 last:border-0">
