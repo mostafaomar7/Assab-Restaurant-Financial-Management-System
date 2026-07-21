@@ -1477,24 +1477,34 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
           </>}
 
           {step===2 && <>
-            <div>
-              <label className="text-xs font-semibold text-gray-600 block mb-2">{t("الموديولات المتاحة","Available Modules")}</label>
-              <div className="grid grid-cols-4 gap-2">
-                {ALL_MODULES.map(m=>{
-                  const mLabel = en ? (EN_MODULE_META[m] || m) : m;
-                  return (
-                    <label key={m} className={`flex items-center gap-1.5 p-2.5 rounded-lg border cursor-pointer transition-all text-xs ${selModules.includes(m)?"border-purple-300 bg-purple-50 text-purple-700 font-semibold":"border-gray-100 text-gray-600 hover:border-gray-300"}`}>
-                      <input type="checkbox" checked={selModules.includes(m)} onChange={()=>toggleArr(selModules,m,setSelModules)} className="sr-only"/>
-                      {selModules.includes(m) && <CheckCircle2 size={12} className="text-purple-500 flex-shrink-0"/>}
-                      {!selModules.includes(m) && <div className="w-3 h-3 border border-gray-300 rounded flex-shrink-0"/>}
-                      {mLabel}
-                    </label>
-                  );
-                })}
+            {/* Branch managers upload their branch's daily data from the mobile app and
+                get access to every module — they don't pick modules, and they don't
+                report to anyone (the accountant is linked to the restaurant instead). */}
+            {isBranchManager ? (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-700">
+                <p className="font-semibold">{t("مدير الفرع لا يحتاج تحديد موديولات أو مسؤول مباشر","Branch manager needs no modules or direct supervisor")}</p>
+                <p className="text-xs mt-1 text-emerald-600">{t("يرفع بياناته اليومية من تطبيق الجوال وله صلاحية على جميع الموديولات تلقائياً.","Uploads daily data from the mobile app with automatic access to all modules.")}</p>
               </div>
-            </div>
+            ) : (
+              <div>
+                <label className="text-xs font-semibold text-gray-600 block mb-2">{t("الموديولات المتاحة","Available Modules")}</label>
+                <div className="grid grid-cols-4 gap-2">
+                  {ALL_MODULES.map(m=>{
+                    const mLabel = en ? (EN_MODULE_META[m] || m) : m;
+                    return (
+                      <label key={m} className={`flex items-center gap-1.5 p-2.5 rounded-lg border cursor-pointer transition-all text-xs ${selModules.includes(m)?"border-purple-300 bg-purple-50 text-purple-700 font-semibold":"border-gray-100 text-gray-600 hover:border-gray-300"}`}>
+                        <input type="checkbox" checked={selModules.includes(m)} onChange={()=>toggleArr(selModules,m,setSelModules)} className="sr-only"/>
+                        {selModules.includes(m) && <CheckCircle2 size={12} className="text-purple-500 flex-shrink-0"/>}
+                        {!selModules.includes(m) && <div className="w-3 h-3 border border-gray-300 rounded flex-shrink-0"/>}
+                        {mLabel}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
-            {(role==="محاسب"||role==="مدير فرع") && (
+            {role==="محاسب" && (
               <div>
                 <label className="text-xs font-semibold text-gray-600 block mb-1">{t("يرفع تقاريره إلى","Reports To")}</label>
                 {/* Must submit the head's userId — a name is rejected with 422. */}
@@ -1515,7 +1525,7 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("العلامات:","Brands:")}</span><span className="font-medium">{selBrands.map(id=>brandNameById.get(id)??id).join(en?", ":"، ")||"—"}</span></div>
                 {selRests.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("المطاعم:","Restaurants:")}</span><span className="font-medium">{selRests.map(id=>availableRests.find(r=>r.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
                 {selBranches.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الفرع:","Branch:")}</span><span className="font-medium">{selBranches.map(id=>(availableBranches as any[]).find(b=>b.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
-                <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الموديولات:","Modules:")}</span><span className="font-medium">{selModules.length} {t("موديول","modules")}</span></div>
+                {!isBranchManager && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الموديولات:","Modules:")}</span><span className="font-medium">{selModules.length} {t("موديول","modules")}</span></div>}
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("النطاق:","Scope:")}</span><span className="font-medium capitalize">{scopeFor()}</span></div>
               </div>
             </div>
@@ -1537,8 +1547,11 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   brands:isScopeless?[]:selBrands,
                   restaurants:isScopeless?[]:selRests,
                   branches:isScopeless?[]:selBranches,
-                  // Branch managers carry the company of their picked brand (derived).
-                  modules:selModules, reportsTo, companyId: isBranchManager ? (selectedBrandCompanyId || undefined) : undefined,
+                  // Branch managers get no modules and no supervisor; they carry the
+                  // company of their picked brand (derived) for the mobile-login provision.
+                  modules: isBranchManager ? [] : selModules,
+                  reportsTo: isBranchManager ? "" : reportsTo,
+                  companyId: isBranchManager ? (selectedBrandCompanyId || undefined) : undefined,
                   scope:isScopeless?"all":scopeFor(), status:"active" });
               }} className="px-6 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold hover:bg-purple-700">
                 ✓ {t("إضافة المستخدم","Add User")}
