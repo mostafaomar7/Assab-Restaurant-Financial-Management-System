@@ -1478,13 +1478,24 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
           </>}
 
           {step===2 && <>
-            {/* Branch managers upload their branch's daily data from the mobile app and
-                get access to every module — they don't pick modules, and they don't
-                report to anyone (the accountant is linked to the restaurant instead). */}
-            {isBranchManager ? (
+            {/* Only accountants and head accountants pick modules. Branch managers,
+                suppliers, procurement managers and admins work from their own surfaces
+                (mobile app / supplier & procurement portals / full admin access), so
+                the module grid is hidden for them. */}
+            {(isBranchManager || isScopeless) ? (
               <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-700">
-                <p className="font-semibold">{t("مدير الفرع لا يحتاج تحديد موديولات أو مسؤول مباشر","Branch manager needs no modules or direct supervisor")}</p>
-                <p className="text-xs mt-1 text-emerald-600">{t("يرفع بياناته اليومية من تطبيق الجوال وله صلاحية على جميع الموديولات تلقائياً.","Uploads daily data from the mobile app with automatic access to all modules.")}</p>
+                <p className="font-semibold">
+                  {isBranchManager ? t("مدير الفرع لا يحتاج تحديد موديولات أو مسؤول مباشر","Branch manager needs no modules or direct supervisor")
+                    : isMorrad ? t("المورد لا يحتاج موديولات","A supplier needs no modules")
+                    : isProcurement ? t("مدير المشتريات لا يحتاج موديولات","Procurement manager needs no modules")
+                    : t("الأدمن لا يحتاج موديولات","An admin needs no modules")}
+                </p>
+                <p className="text-xs mt-1 text-emerald-600">
+                  {isBranchManager ? t("يرفع بياناته اليومية من تطبيق الجوال وله صلاحية على جميع الموديولات تلقائياً.","Uploads daily data from the mobile app with automatic access to all modules.")
+                    : isMorrad ? t("يعمل من بوابة المورد — يستقبل طلبات التوريد ويدير الكتالوج، بلا صلاحيات موديولات.","Works from the supplier portal — receives supply orders and manages the catalog, with no module permissions.")
+                    : isProcurement ? t("يعمل من بوابة المشتريات — أوامر الشراء والموردون، بلا صلاحيات موديولات.","Works from the procurement portal — purchase orders and suppliers, with no module permissions.")
+                    : t("الأدمن له صلاحية كاملة على النظام تلقائياً.","An admin has full access to the system automatically.")}
+                </p>
               </div>
             ) : (
               <div>
@@ -1526,7 +1537,7 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("العلامات:","Brands:")}</span><span className="font-medium">{selBrands.map(id=>brandNameById.get(id)??id).join(en?", ":"، ")||"—"}</span></div>
                 {selRests.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("المطاعم:","Restaurants:")}</span><span className="font-medium">{selRests.map(id=>availableRests.find(r=>r.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
                 {selBranches.length>0 && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الفرع:","Branch:")}</span><span className="font-medium">{selBranches.map(id=>(availableBranches as any[]).find(b=>b.id===id)?.name??id).join(en?", ":"، ")}</span></div>}
-                {!isBranchManager && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الموديولات:","Modules:")}</span><span className="font-medium">{selModules.length} {t("موديول","modules")}</span></div>}
+                {!isBranchManager && !isScopeless && <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("الموديولات:","Modules:")}</span><span className="font-medium">{selModules.length} {t("موديول","modules")}</span></div>}
                 <div className="flex gap-2"><span className="text-gray-400 w-20 flex-shrink-0">{t("النطاق:","Scope:")}</span><span className="font-medium capitalize">{scopeFor()}</span></div>
               </div>
             </div>
@@ -1548,9 +1559,10 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                   brands:isScopeless?[]:selBrands,
                   restaurants:isScopeless?[]:selRests,
                   branches:isScopeless?[]:selBranches,
-                  // Branch managers get no modules and no supervisor; they carry the
-                  // company of their picked brand (derived) for the mobile-login provision.
-                  modules: isBranchManager ? [] : selModules,
+                  // Only accountants/heads carry modules. Branch managers, suppliers,
+                  // procurement managers and admins send none. Branch managers also carry
+                  // the company of their picked brand (derived) for the mobile-login provision.
+                  modules: (isBranchManager || isScopeless) ? [] : selModules,
                   reportsTo: isBranchManager ? "" : reportsTo,
                   companyId: isBranchManager ? (selectedBrandCompanyId || undefined) : undefined,
                   scope:isScopeless?"all":scopeFor(), status:"active" });
