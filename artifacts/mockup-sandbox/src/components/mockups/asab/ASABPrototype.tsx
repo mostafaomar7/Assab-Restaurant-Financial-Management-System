@@ -13898,21 +13898,27 @@ function BranchEmployees({}: PageProps) {
           </div>
         </div>
       )}
-      <Card title={t("فرع الرياض العليا","Riyadh Al-Olaya Branch")}>
-        <table className="w-full" dir="rtl">
+      <Card title={(apiOverview as any)?.branch?.name ?? t("موظفو الفرع","Branch Employees")}>
+        {emps.length===0 && !noBranch && <div className="px-5 py-8 text-center text-sm text-gray-400">{t("لا يوجد موظفون بعد","No employees yet")}</div>}
+        {emps.length>0 && <table className="w-full" dir="rtl">
           <thead className="bg-gray-50"><tr className="text-xs text-gray-500 font-semibold"><th className="px-4 py-3 text-right">{t("الموظف","Employee")}</th><th className="px-4 py-3 text-right">{t("الدور","Role")}</th><th className="px-4 py-3 text-center">{t("الراتب","Salary")}</th><th className="px-4 py-3 text-center">{t("الشفت","Shift")}</th><th className="px-4 py-3 text-center">{t("الحالة","Status")}</th></tr></thead>
           <tbody className="divide-y divide-gray-100">
-            {emps.map((e,i)=>(
-              <tr key={i} className="hover:bg-gray-50">
-                <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-xs">{e.name[0]}</div><span className="font-semibold text-sm text-gray-800">{e.name}</span></div></td>
-                <td className="px-4 py-3 text-sm text-gray-600">{e.role}</td>
-                <td className="px-4 py-3 text-center font-mono text-sm font-semibold">{e.salary.toLocaleString()} {t("ر.س","SAR")}</td>
-                <td className="px-4 py-3 text-center"><Badge className="bg-gray-50 text-gray-600">{e.shift}</Badge></td>
-                <td className="px-4 py-3 text-center"><Badge className={e.active?"bg-emerald-50 text-emerald-700":"bg-gray-50 text-gray-500"}>{e.active?t("نشط","Active"):t("إجازة","On Leave")}</Badge></td>
+            {emps.map((e,i)=>{
+              // API shape: { name, role, monthlySalary (halalas), shiftType, status }.
+              const salaryHalalas = e.monthlySalary ?? e.salaryHalalas ?? (typeof e.salary === "number" ? e.salary*100 : 0);
+              const shift = e.shiftType ?? e.shift ?? "—";
+              const active = (e.status ?? (e.active ? "active" : "")) === "active";
+              return (
+              <tr key={e.id ?? i} className="hover:bg-gray-50">
+                <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-xs">{(e.name||"?")[0]}</div><span className="font-semibold text-sm text-gray-800">{e.name||"—"}</span></div></td>
+                <td className="px-4 py-3 text-sm text-gray-600">{e.role||"—"}</td>
+                <td className="px-4 py-3 text-center font-mono text-sm font-semibold">{Math.round((salaryHalalas||0)/100).toLocaleString()} {t("ر.س","SAR")}</td>
+                <td className="px-4 py-3 text-center"><Badge className="bg-gray-50 text-gray-600">{shift}</Badge></td>
+                <td className="px-4 py-3 text-center"><Badge className={active?"bg-emerald-50 text-emerald-700":"bg-gray-50 text-gray-500"}>{active?t("نشط","Active"):t("إجازة","On Leave")}</Badge></td>
               </tr>
-            ))}
+            );})}
           </tbody>
-        </table>
+        </table>}
       </Card>
     </div>
   );
