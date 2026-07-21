@@ -327,6 +327,9 @@ export function useCreateProcurementItem() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
+      // The platform procurement surface caches items under a different key — refresh
+      // it too so the list updates without a manual reload on either surface.
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
       toast.success("تم إضافة الصنف");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -341,6 +344,9 @@ export function useDeleteProcurementItem() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
+      // The platform procurement surface caches items under a different key — refresh
+      // it too so the list updates without a manual reload on either surface.
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
       toast.success("تم حذف الصنف");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -362,6 +368,9 @@ export function useUpdateProcurementItem() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
+      // The platform procurement surface caches items under a different key — refresh
+      // it too so the list updates without a manual reload on either surface.
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
       toast.success("تم تحديث الصنف");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -396,6 +405,7 @@ export function useCreateSupplier() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementSuppliers });
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementSuppliers });
       toast.success("تم إضافة المورد");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -417,6 +427,7 @@ export function useUpdateSupplier() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementSuppliers });
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementSuppliers });
       toast.success("تم تحديث المورد");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -443,6 +454,7 @@ export function useRateSupplier() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementSuppliers });
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementSuppliers });
       toast.success("تم حفظ التقييم");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -460,6 +472,7 @@ export function useToggleSupplierActive() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementSuppliers });
+      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementSuppliers });
       toast.success("تم تحديث حالة المورد");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
