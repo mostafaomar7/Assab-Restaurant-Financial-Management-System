@@ -13826,8 +13826,13 @@ const isCashierRole = (role: string) =>
 function BranchEmployees({}: PageProps) {
   const { t } = useLang();
   const { data: apiEmps = [] } = useBranchEmployeesPlatform();
+  const { data: apiOverview } = useBranchOverviewPlatform();
   const addEmpMut = useAddBranchEmployeePlatform();
   const emps = ((apiEmps as any[]).length > 0 ? (apiEmps as any) : []) as any[];
+  // The backend derives the branch from the manager's assignment; a manager created
+  // without a branch (e.g. via CSV import) can't add employees (422 NO_BRANCH_ASSIGNED).
+  // Detect it once the overview loads and block the flow with a clear message instead.
+  const noBranch = !!apiOverview && !((apiOverview as any)?.branch?.id);
   const [showAdd, setShowAdd] = useState(false);
   const emptyForm = { name:"", empNumber:"", role:"كاشير", salary:"", shift:"صباحي", email:"", phone:"" };
   const [form, setForm] = useState(emptyForm);
@@ -13852,7 +13857,16 @@ function BranchEmployees({}: PageProps) {
   };
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2><Btn variant="primary" size="sm" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة موظف","Add Employee")}</Btn></div>
+      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2><Btn variant="primary" size="sm" disabled={noBranch} onClick={()=>{ if(!noBranch) setShowAdd(true); }}><Plus size={13}/> {t("إضافة موظف","Add Employee")}</Btn></div>
+      {noBranch && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5"/>
+          <div>
+            <p className="text-sm font-bold text-amber-800">{t("لم يتم تعيين فرع لحسابك بعد","No branch is assigned to your account yet")}</p>
+            <p className="text-xs text-amber-700 mt-0.5">{t("لا يمكن إضافة موظفين قبل أن يعيّن لك أدمن النظام فرعاً. تواصل مع الإدارة لتعيين الفرع.","You can't add employees until a system admin assigns you a branch. Contact your administrator to set it.")}</p>
+          </div>
+        </div>
+      )}
       {showAdd && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={()=>setShowAdd(false)}>
           <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden" onClick={e=>e.stopPropagation()} dir="rtl">
