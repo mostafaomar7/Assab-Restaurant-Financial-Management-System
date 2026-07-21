@@ -11599,13 +11599,8 @@ function AdminRestaurants({}: PageProps) {
             <p className="font-semibold text-purple-800 text-sm">{t("إضافة علامة تجارية جديدة","Add New Brand")}</p>
             <button onClick={()=>setShowAddBrand(false)}><X size={14} className="text-purple-400"/></button>
           </div>
-          {/* companyId is OPTIONAL — omitting it makes the backend create a company
-              named after the brand and link it. Never send "" (→ 422). */}
-          <div className="mb-3"><label className="text-xs text-gray-500 block mb-1">{t("الشركة (اختياري)","Company (optional)")}</label>
-            <select value={brandForm.companyId} onChange={e=>setBrandForm(f=>({...f,companyId:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
-              <option value="">{t("— إنشاء شركة تلقائياً باسم العلامة —","— Auto-create a company named after the brand —")}</option>
-              {companyOptions.map((c:any)=><option key={c.id} value={c.id}>{c.name}</option>)}
-            </select></div>
+          {/* No company picker: the backend auto-creates a company named after the
+              brand (companyId is omitted entirely). */}
           <div className="grid grid-cols-3 gap-3">
             <div><label className="text-xs text-gray-500 block mb-1">{t("اسم العلامة","Brand Name")}</label><input value={brandForm.name} onChange={e=>setBrandForm(f=>({...f,name:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("علامة جديدة","New brand")}/></div>
             <div><label className="text-xs text-gray-500 block mb-1">{t("المالك / المسؤول","Owner / Manager")}</label><input value={brandForm.owner} onChange={e=>setBrandForm(f=>({...f,owner:e.target.value}))} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder={t("اسم المالك","Owner name")}/></div>
