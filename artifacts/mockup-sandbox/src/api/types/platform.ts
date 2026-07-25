@@ -84,15 +84,26 @@ export interface AdminBrand {
   emailSent?: boolean;
   plan?: string;
   modules?: string[];
+  /** BUG-1: fixed catalog of 9; empty `modules` = full set, so this is 9 there. Prefer over modules.length. */
+  moduleCount?: number;
+  subStatus?: string;
+  daysLeft?: number;
+  companyId?: string;
+  status?: string;
   restaurants?: AdminRestaurant[];
 }
 
 export interface AdminRestaurant {
   id: string;
   brandId: string;
+  companyId?: string;
   name: string;
   city?: string;
   status?: "active" | "suspended" | string;
+  /** BUG-2: real accountant count (brand-derived). Present in the brand tree. */
+  accountants?: number;
+  /** BUG-2: same count on the restaurant object returned by create/update. */
+  accountantCount?: number;
   branches?: AdminBranch[];
 }
 
@@ -157,11 +168,15 @@ export interface AdminDistribution {
     avatar?: string;
     headId: string;
     restaurants: string[];
+    /** BUG-4: id+name pairs for display (was ids only → "zero restaurants"). */
+    restaurantsNamed?: Array<{ id: string; name: string }>;
   }>;
   allRestaurants: string[];
   assignedRestaurants: string[];
   freeRestaurants: string[];
   accModules: Record<string, Record<string, string[]>>;
+  /** BUG-4: id → name map so any restaurant id in the payload resolves to a name. */
+  restaurantNames?: Record<string, string>;
 }
 
 export type AdminPermission =
@@ -996,6 +1011,16 @@ export interface PurchaseOrderSendResult {
   savingsPct?: number | null;
   eta?: string | null; // T11.9
   sentAt: string;
+  // FR-PUR-1: WhatsApp send-to-supplier. Open `url` to launch WhatsApp pre-filled.
+  whatsapp?: {
+    channel: string;
+    reference: string;
+    supplierName: string;
+    phone: string | null;
+    message: string;
+    url: string | null;
+    deliverable: boolean;
+  } | null;
 }
 
 export interface PurchaseOrderBulkApproveResult {

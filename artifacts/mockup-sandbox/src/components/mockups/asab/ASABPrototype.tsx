@@ -100,6 +100,7 @@ import {
   useAdminUploadFixedAssets,
   useAdminUploadTemplate,
   useAdminBrandUploadStatus,
+  useAdminRestaurantEmployeeStatus,
   useExportOperations,
   useExportHeadOperations,
   useExportAssets,
@@ -10201,8 +10202,14 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
       brands = Array.from(new Set([...fromBranches, ...fromRests]));
     }
     // Map any leftover ids to names (a value already being a name passes through).
-    const branches = branchesRaw.map(b => branchParent.branchName.get(b) ?? b);
+    let branches = branchesRaw.map(b => branchParent.branchName.get(b) ?? b);
     restaurants = restaurants.map(r => branchParent.restName.get(r) ?? r);
+    // BUG-3: prefer the backend-provided *Named arrays when present (authoritative id→name).
+    const uAny = u as any;
+    const toNames = (arr:any):string[] => Array.isArray(arr) ? (arr.map((x:any)=> (x && typeof x==="object") ? x.name : x).filter(Boolean) as string[]) : [];
+    const bn = toNames(uAny.brandsNamed);       if (bn.length)  brands = bn;
+    const rn = toNames(uAny.restaurantsNamed);  if (rn.length)  restaurants = rn;
+    const brn = toNames(uAny.branchesNamed);    if (brn.length) branches = brn;
     return { brands, restaurants, branches };
   };
   const importFileRef = useRef<HTMLInputElement>(null);
@@ -10228,6 +10235,9 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   const ALL_RESTS = (Array.isArray((distApi as any)?.allRestaurants)
     ? (distApi as any).allRestaurants
     : []) as string[];
+  // BUG-4: resolve a restaurant id to its display name via the backend id→name map.
+  const restaurantNames = ((distApi as any)?.restaurantNames ?? {}) as Record<string,string>;
+  const restName = (id:string) => restaurantNames[id] ?? id;
   const assignedRests = distAccs.flatMap(a=>a.restaurants);
   const freeRests     = ALL_RESTS.filter(r=>!assignedRests.includes(r));
   const accsUnderHead = distAccs.filter(a=>a.headId===headSel);
@@ -10483,7 +10493,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                       : selAccRests.map(rest=>(
                           <div key={rest} className="flex items-center gap-2.5 px-4 py-2.5 hover:bg-gray-50">
                             <div className="w-2 h-2 rounded-full bg-emerald-400 flex-shrink-0"/>
-                            <span className="text-sm text-gray-700 flex-1">{rest}</span>
+                            <span className="text-sm text-gray-700 flex-1">{restName(rest)}</span>
                             <button onClick={()=>removeRestFromAcc(accSel!,rest)} className="text-red-400 hover:text-red-600 flex-shrink-0 text-xs px-1.5 py-0.5 rounded hover:bg-red-50">✕</button>
                           </div>
                         ))
@@ -10494,7 +10504,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                         {availableForAcc.map(rest=>(
                           <div key={rest} className="flex items-center gap-2.5 py-1.5 hover:bg-white rounded px-1">
                             <div className="w-2 h-2 rounded-full bg-gray-300 flex-shrink-0"/>
-                            <span className="text-xs text-gray-500 flex-1">{rest}</span>
+                            <span className="text-xs text-gray-500 flex-1">{restName(rest)}</span>
                             <button onClick={()=>addRestToAcc(accSel!,rest)} className="text-emerald-500 hover:text-emerald-700 flex-shrink-0 text-xs px-1.5 py-0.5 rounded hover:bg-emerald-50 font-bold">+</button>
                           </div>
                         ))}
@@ -10527,7 +10537,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                         <div className="flex flex-wrap gap-1">
                           {acc.restaurants.length===0
                             ? <span className="text-[10px] text-gray-400">{t("لا مطاعم","No restaurants")}</span>
-                            : acc.restaurants.map(r=><span key={r} className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-100 rounded px-1.5 py-0.5">{r.split("—")[0].trim()}</span>)
+                            : acc.restaurants.map(r=><span key={r} className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-100 rounded px-1.5 py-0.5">{restName(r).split("—")[0].trim()}</span>)
                           }
                         </div>
                       </div>
@@ -11247,6 +11257,16 @@ function AdminRestaurants({}: PageProps) {
   const uploadAssetsMut = useAdminUploadFixedAssets();
   const templateMut     = useAdminUploadTemplate();
   const { data: brandUploadStatus } = useAdminBrandUploadStatus(uploadBrand);
+  // Employees aren't a brand-owner upload step, so brandUploadStatus never
+  // reports them (the `.employees` map there is always empty → the column was
+  // stuck on «لم يُرفع»). Read the real per-restaurant employee state from the
+  // restaurant upload-status endpoint instead — batched over the brand's rests.
+  const uploadRestIds = useMemo(
+    () => (BRANDS.find(b=>b.id===uploadBrand) ?? BRANDS[0])?.restaurants.map(r=>r.id) ?? [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [uploadBrand, brandsApi],
+  );
+  const restEmpStatus = useAdminRestaurantEmployeeStatus(uploadRestIds);
   // Last failure per card key, so INVALID_HEADER can show expected vs received.
   const [uploadErrors, setUploadErrors] = useState<Record<string, any>>({});
   const noteUploadError = (key:string, e:unknown) => {
@@ -11344,12 +11364,12 @@ function AdminRestaurants({}: PageProps) {
 
         // per-restaurant employee upload state
         const empKey = (rid:string) => `${uploadBrand}_${rid}`;
-        // Persisted status comes from the brand upload-status maps (keyed by
-        // restaurant/branch id) when the backend returns them; otherwise it falls
-        // back to the in-session optimistic flip. No per-row request either way.
-        const apiEmpDone    = ((brandUploadStatus as any)?.employees ?? {}) as Record<string,boolean>;
+        // Persisted employee status comes from the per-restaurant upload-status
+        // endpoint (restEmpStatus, keyed by restaurantId) — the brand endpoint
+        // doesn't track employees. Falls back to the in-session optimistic flip
+        // until the query resolves. No per-row request either way.
         const apiAssetsDone = ((brandUploadStatus as any)?.assets ?? {}) as Record<string,boolean>;
-        const restEmpDone = (rid:string) => Boolean(apiEmpDone[rid]) || (brandUploads[empKey(rid)]?.employees ?? false);
+        const restEmpDone = (rid:string) => Boolean(restEmpStatus[rid]) || (brandUploads[empKey(rid)]?.employees ?? false);
         const setRestEmp  = (rid:string) => setUploaded(empKey(rid),"employees");
 
         // Renders EMPTY_FILE / INVALID_HEADER (expected vs received) and per-row errors.
@@ -11810,7 +11830,7 @@ function AdminRestaurants({}: PageProps) {
                 <div className="flex items-center gap-4 flex-shrink-0">
                   <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{restCount}</p><p className="text-[10px] text-gray-400">{t("مطعم","Restaurant")}</p></div>
                   <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{branchCount}</p><p className="text-[10px] text-gray-400">{t("فرع","Branch")}</p></div>
-                  <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{brand.modules.length}</p><p className="text-[10px] text-gray-400">{t("موديول","Module")}</p></div>
+                  <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{(brand as any).moduleCount ?? (brand.modules.length || 9)}</p><p className="text-[10px] text-gray-400">{t("موديول","Module")}</p></div>
                   {brand.ownerEmail && (
                     <button
                       onClick={(e)=>{ e.stopPropagation(); if(resetOwnerMut.isPending) return; if(window.confirm(t(`إرسال باسورد جديد إلى ${brand.ownerEmail}؟`,`Send a new password to ${brand.ownerEmail}?`))) resetOwnerMut.mutate({ brandId:brand.id }); }}

@@ -649,7 +649,9 @@ export interface Asset {
   name: string;
   category: string;
   categoryLabelAr?: string;
-  branchId: string;
+  /** null for brand-level uploaded assets awaiting assignment to a branch. */
+  branchId: string | null;
+  branchName?: string | null;
   /** Purchase price (halalas). Server returns both `cost` and `priceHalalas`. */
   cost: number;
   priceHalalas: number;

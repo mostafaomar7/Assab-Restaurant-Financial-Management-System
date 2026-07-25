@@ -1,5 +1,6 @@
 import {
   useMutation,
+  useQueries,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -1629,6 +1630,35 @@ export function useAdminRestaurantUploadStatus(
       return res.data;
     },
   });
+}
+
+/**
+ * Batch per-restaurant employee upload state, keyed by restaurantId.
+ * Employees are NOT a brand-owner step, so the brand upload-status never
+ * reports them — the authoritative source is the per-restaurant endpoint
+ * (`GET /admin/restaurants/{id}/upload-status`, `employees: boolean`). One
+ * query per restaurant via useQueries so the whole brand's grid resolves.
+ */
+export function useAdminRestaurantEmployeeStatus(
+  restaurantIds: string[],
+): Record<string, boolean> {
+  const results = useQueries({
+    queries: restaurantIds.map((rid) => ({
+      queryKey: ["platform", "admin", "restaurants", rid, "upload-status"],
+      enabled: Boolean(rid),
+      queryFn: async () => {
+        const res = await api.get<AdminRestaurantUploadStatus>(
+          `/admin/restaurants/${rid}/upload-status`,
+        );
+        return res.data;
+      },
+    })),
+  });
+  const map: Record<string, boolean> = {};
+  restaurantIds.forEach((rid, i) => {
+    map[rid] = Boolean(results[i]?.data?.employees);
+  });
+  return map;
 }
 
 export function useExportAdminAuditLogs() {

@@ -5,8 +5,9 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, downloadBlob } from "../client";
-import { getErrorMessage } from "../errors";
+import { getErrorMessage, ApiError } from "../errors";
 import { queryKeys, type ProcurementOrdersFilter } from "./keys";
+import type { PurchaseOrderSendResult } from "../types/platform";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export interface ProcurementOverviewResponse {
@@ -267,17 +268,40 @@ export function useRejectOrder() {
 export function useSendGroupedOrder() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (groupId: string) => {
-      const res = await api.post<{ sentOrderIds: string[] }>(
-        `/company/me/procurement/orders/grouped/${groupId}/send`,
-      );
-      return res.data;
+    // FR-PUR-1: the new WhatsApp send-to-supplier endpoint (per supplier). If the new
+    // route isn't deployed yet (404), fall back to the legacy per-group send so the
+    // button keeps working (without WhatsApp) instead of breaking.
+    mutationFn: async (vars: { supplierId: string; groupId?: string; orderIds?: string[]; expectedDeliveryDate?: string }) => {
+      const { groupId, ...body } = vars;
+      try {
+        const res = await api.post<PurchaseOrderSendResult>(
+          "/company/me/procurement/purchase-orders/grouped/send",
+          body,
+        );
+        return res.data;
+      } catch (e) {
+        if (e instanceof ApiError && e.status === 404 && groupId) {
+          const legacy = await api.post<{ sentOrderIds: string[] }>(
+            `/company/me/procurement/orders/grouped/${groupId}/send`,
+          );
+          return { ordersCount: legacy.data?.sentOrderIds?.length ?? 0, whatsapp: null } as unknown as PurchaseOrderSendResult;
+        }
+        throw e;
+      }
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: queryKeys.procurementGroupedOrders });
       qc.invalidateQueries({ queryKey: queryKeys.procurementSentOrders });
       qc.invalidateQueries({ queryKey: queryKeys.procurementOverview });
-      toast.success("تم إرسال الأوامر المجمعة");
+      const wa = data?.whatsapp;
+      if (wa?.deliverable && wa.url) {
+        window.open(wa.url, "_blank", "noopener,noreferrer");
+        toast.success("تم التجهيز — افتح واتساب لإرسال الطلب للمورد");
+      } else if (wa && !wa.deliverable) {
+        toast.warning("تم الإرسال، لكن لا يوجد رقم واتساب للمورد — أضف رقم الجوال للمورد");
+      } else {
+        toast.success("تم إرسال الأوامر المجمعة");
+      }
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

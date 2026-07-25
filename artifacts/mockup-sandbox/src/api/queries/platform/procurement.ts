@@ -442,12 +442,21 @@ export function useSendGroupedPurchaseOrders() {
       });
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       invalidatePO(qc);
       qc.invalidateQueries({
         queryKey: queryKeys.platformPurchaseOrdersSent,
       });
-      toast.success("تم الإرسال للمورد");
+      // FR-PUR-1: launch WhatsApp pre-filled if the supplier is reachable.
+      const wa = data?.whatsapp;
+      if (wa?.deliverable && wa.url) {
+        window.open(wa.url, "_blank", "noopener,noreferrer");
+        toast.success("تم التجهيز — افتح واتساب لإرسال الطلب للمورد");
+      } else if (wa && !wa.deliverable) {
+        toast.warning("تم الإرسال، لكن لا يوجد رقم واتساب للمورد — أضف رقم الجوال للمورد");
+      } else {
+        toast.success("تم الإرسال للمورد");
+      }
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

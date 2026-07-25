@@ -70,6 +70,7 @@ import type {
   Employee as ApiEmployee, EmployeeMovementCategory, CashCustodyRow,
 } from "../../../api/types/company";
 import { isApiError } from "../../../api/errors";
+import { isUnassignedAsset, buildAssignPatch, branchPatchPart } from "./assetAssignment";
 import { NotificationBell } from "../../shared/NotificationBell";
 import { RejectModal } from "../../shared/RejectModal";
 import { ClarifyModal } from "../../shared/ClarifyModal";
@@ -4359,14 +4360,28 @@ function AccCompanyAssets() {
     );
   };
   const [editAsset, setEditAsset] = useState<Asset|null>(null);
-  const [eForm, setEForm] = useState({ name:"", category:"", custodian:"", serial:"", bookValue:"", status:"active" });
-  const openEdit = (a:Asset) => { setEditAsset(a); setEForm({ name:a.name, category:a.category, custodian:a.custodian??"", serial:a.serial??"", bookValue:String(Math.round((a.bookValueHalalas??0)/100)), status:a.status }); };
+  const [eForm, setEForm] = useState({ name:"", category:"", custodian:"", serial:"", bookValue:"", status:"active", branchId:"" });
+  const openEdit = (a:Asset) => { setEditAsset(a); setEForm({ name:a.name, category:a.category, custodian:a.custodian??"", serial:a.serial??"", bookValue:String(Math.round((a.bookValueHalalas??0)/100)), status:a.status, branchId:a.branchId??"" }); };
   const submitEdit = () => {
     if (!editAsset) return;
     patchAssetMut.mutate(
       { id: editAsset.id, patch: { name:eForm.name, category:eForm.category, custodian:eForm.custodian||null, serial:eForm.serial||null,
-        bookValueHalalas:Math.round((parseFloat(eForm.bookValue)||0)*100), status:eForm.status } },
+        bookValueHalalas:Math.round((parseFloat(eForm.bookValue)||0)*100), status:eForm.status,
+        ...branchPatchPart(eForm.branchId) } },
       { onSuccess: () => setEditAsset(null) },
+    );
+  };
+
+  // Brand-level uploaded assets land with branchId=null and never show in branch
+  // screens until assigned. Surface them here and assign via PATCH .../assets/{id}.
+  const unassignedAssets = apiAssets.filter(isUnassignedAsset);
+  const [assignBranch, setAssignBranch] = useState<Record<string,string>>({});
+  const assignToBranch = (a:Asset) => {
+    const patch = buildAssignPatch(assignBranch[a.id] ?? "");
+    if (!patch) return;
+    patchAssetMut.mutate(
+      { id: a.id, patch },
+      { onSuccess: () => setAssignBranch(p=>{ const n={...p}; delete n[a.id]; return n; }) },
     );
   };
 
@@ -4418,6 +4433,37 @@ function AccCompanyAssets() {
                 ) : (
                   <Badge className="bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] flex-shrink-0">✅ {t("مؤكد","Confirmed")}</Badge>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {unassignedAssets.length>0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <AlertTriangle size={16} className="text-amber-600"/>
+            <p className="font-bold text-gray-800 text-sm">{t("أصول بانتظار التخصيص لفرع","Assets awaiting branch assignment")} ({unassignedAssets.length})</p>
+            <Badge className="bg-amber-100 text-amber-700 border border-amber-200 text-[10px]">{t("مرفوعة على مستوى العلامة","Uploaded at brand level")}</Badge>
+          </div>
+          <p className="text-[11px] text-amber-700">{t("هذه الأصول مرفوعة على مستوى العلامة التجارية ولن تظهر في شاشات الفروع حتى تُخصَّص لفرع.","These assets were uploaded at the brand level and won't appear in branch screens until assigned to a branch.")}</p>
+          <div className="space-y-2">
+            {unassignedAssets.map(a=>(
+              <div key={a.id} className="flex items-center gap-3 bg-white rounded-xl border border-amber-100 px-4 py-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-200 flex items-center justify-center flex-shrink-0"><Building2 size={15} className="text-amber-600"/></div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-semibold text-gray-800 text-sm truncate">{a.name}</p>
+                  <p className="text-[10px] text-gray-400" dir="ltr">{a.publicId} · {a.categoryLabelAr ?? catLabel(a.category)} · {fmt(Math.round((a.bookValueHalalas??0)/100))} {SAR}</p>
+                </div>
+                <select value={assignBranch[a.id] ?? ""} onChange={e=>setAssignBranch(p=>({...p,[a.id]:e.target.value}))}
+                  className="text-xs border border-amber-200 rounded-lg px-2 py-2 bg-white flex-shrink-0 max-w-[160px]">
+                  <option value="">{t("اختر الفرع","Select branch")}</option>
+                  {branchOpts.map(b=><option key={b.branchId} value={b.branchId}>{b.branchName}</option>)}
+                </select>
+                <button onClick={()=>assignToBranch(a)} disabled={!assignBranch[a.id]||patchAssetMut.isPending}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-[11px] font-bold hover:bg-amber-700 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1 flex-shrink-0">
+                  <Check size={11}/> {t("تخصيص","Assign")}
+                </button>
               </div>
             ))}
           </div>
@@ -4499,6 +4545,7 @@ function AccCompanyAssets() {
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الفئة","Category")}</label><select value={eForm.category} onChange={e=>setEForm(f=>({...f,category:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none">{catOptions.map(c=><option key={c.key} value={c.key}>{c.labelAr}</option>)}</select></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الحالة","Status")}</label><select value={eForm.status} onChange={e=>setEForm(f=>({...f,status:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none">{Object.keys(SL).map(k=><option key={k} value={k}>{SL[k]}</option>)}</select></div>
+                <div className="col-span-2"><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الفرع","Branch")}</label><select value={eForm.branchId} onChange={e=>setEForm(f=>({...f,branchId:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"><option value="">{t("غير مخصص","Unassigned")}</option>{branchOpts.map(b=><option key={b.branchId} value={b.branchId}>{b.branchName}</option>)}</select></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("القيمة الدفترية (ر.س)","Book value (SAR)")}</label><input type="number" value={eForm.bookValue} onChange={e=>setEForm(f=>({...f,bookValue:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"/></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الرقم التسلسلي","Serial")}</label><input value={eForm.serial} onChange={e=>setEForm(f=>({...f,serial:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"/></div>
                 <div className="col-span-2"><label className="text-xs font-semibold text-gray-600 block mb-1">{t("العهدة","Custodian")}</label><input value={eForm.custodian} onChange={e=>setEForm(f=>({...f,custodian:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none"/></div>
@@ -6422,9 +6469,10 @@ function ProcGrouped() {
   const { data: apiGroups = [] } = useGroupedOrders();
   const sendGroupedMut = useSendGroupedOrder();
   const SAR = t("ر.س","SAR");
-  const groups: Array<{ supplier:string; orders:number; total:number; branches:string[]; pending:boolean; groupId?: string }> =
+  const groups: Array<{ supplier:string; supplierId?:string; orders:number; total:number; branches:string[]; pending:boolean; groupId?: string }> =
     apiGroups.map(g => ({
       supplier: g.supplierName,
+      supplierId: g.supplierId,
       orders: g.ordersCount,
       total: Math.round((g.totalHalalas ?? 0) / 100),
       branches: (g.orders ?? []).map(o => o.branchName || "—"),
@@ -6435,7 +6483,6 @@ function ProcGrouped() {
     <div className="space-y-5" dir={dir}>
       <div className="flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-gray-800">{t("الأوامر المجمّعة","Grouped Orders")}</h2><p className="text-gray-400 text-sm">{t("تجميع أوامر الشراء حسب المورد عبر كل الفروع","Group purchase orders by supplier across all branches")}</p></div>
-        <Btn variant="primary" size="sm" onClick={()=>{ const first = groups.find(g => g.pending && g.groupId); if (first?.groupId) sendGroupedMut.mutate(first.groupId); else alert(`📦 ${t("تم إرسال الأمر المجمّع للموردين","Grouped order sent to suppliers")}`); }}><Send size={13}/> {t("إرسال المجمّعة","Send Grouped")}</Btn>
       </div>
       <div className="space-y-4">
         {groups.map((g,i)=>(
@@ -6446,8 +6493,14 @@ function ProcGrouped() {
               <span className="font-mono font-bold text-gray-800">{fmt(g.total)} {SAR}</span>
               <Badge className={`text-[10px] ${g.pending?"bg-amber-50 text-amber-700 border border-amber-200":"bg-emerald-50 text-emerald-700 border border-emerald-200"}`}>{g.pending?t("معلق","Pending"):t("معتمد","Approved")}</Badge>
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5 items-center">
               {g.branches.map(b=><span key={b} className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 text-[10px] font-medium">{b}</span>)}
+            </div>
+            <div className="flex justify-end mt-3">
+              <Btn variant="primary" size="sm" disabled={!g.supplierId || sendGroupedMut.isPending}
+                onClick={()=>{ if(g.supplierId) sendGroupedMut.mutate({ supplierId: g.supplierId, groupId: g.groupId }); }}>
+                <Send size={12}/> {t("إرسال عبر واتساب","Send via WhatsApp")}
+              </Btn>
             </div>
           </div>
         ))}
