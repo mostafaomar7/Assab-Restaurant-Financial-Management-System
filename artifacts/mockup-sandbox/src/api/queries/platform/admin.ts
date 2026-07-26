@@ -14,6 +14,8 @@ import type {
   AdminBranchUploadStatus,
   AdminBrandUploadStatus,
   AdminBrandUploadType,
+  AdminBrandBranchesUploadStatus,
+  AdminAccountantModulesResponse,
   AdminRestaurantUploadStatus,
   AdminUploadResult,
   AdminCompany,
@@ -941,8 +943,11 @@ export function useSetAccountantRestaurantModules() {
       );
       return res.data;
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: queryKeys.platformAdminDistribution });
+      qc.invalidateQueries({
+        queryKey: ["platform", "admin", "accountants", variables.accId, "modules"],
+      });
       toast.success("تم تحديث الوحدات");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -1659,6 +1664,46 @@ export function useAdminRestaurantEmployeeStatus(
     map[rid] = Boolean(results[i]?.data?.employees);
   });
   return map;
+}
+
+/**
+ * The whole per-branch fixed-assets column in one call. Per-branch assets aren't
+ * a brand-owner step, so the brand upload-status never reported them — this
+ * endpoint carries `fixedAssetsStatus` (done/failed/not_uploaded) per branch.
+ */
+export function useAdminBrandBranchesUploadStatus(
+  brandId: string | null | undefined,
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "brands", brandId ?? "", "branches-upload-status"],
+    enabled: Boolean(brandId),
+    queryFn: async () => {
+      const res = await api.get<AdminBrandBranchesUploadStatus>(
+        `/admin/brands/${brandId}/branches/upload-status`,
+      );
+      return res.data;
+    },
+  });
+}
+
+/**
+ * Per-restaurant module matrix for one accountant, with restaurant NAMES and the
+ * full moduleCatalog. `reason: "NO_COVERED_RESTAURANTS"` ⇒ accountant has no brand yet.
+ */
+export function useAdminAccountantModules(
+  accId: string | null | undefined,
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "accountants", accId ?? "", "modules"],
+    enabled: Boolean(accId) && (opts.enabled ?? true),
+    queryFn: async () => {
+      const res = await api.get<AdminAccountantModulesResponse>(
+        `/admin/accountants/${accId}/modules`,
+      );
+      return res.data;
+    },
+  });
 }
 
 export function useExportAdminAuditLogs() {

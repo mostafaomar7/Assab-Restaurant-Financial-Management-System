@@ -4327,6 +4327,9 @@ function AccCompanyAssets() {
   });
   const apiAssets = serverAssets?.data ?? [];
   const summary = serverAssets?.meta?.summary;
+  // Pending-assignment assets come from a dedicated query so the banner stays
+  // complete regardless of the register's active category/status filters.
+  const { data: pendingAssetsResp } = useAssets({ assignment: "pending", pageSize: 100 });
 
   const catLabel = (key:string) => categories.find(c=>c.key===key)?.labelAr ?? key;
   const branchName = (id?:string|null) => ALL_BRANCHES.find(b=>b.id===id)?.name ?? id ?? "—";
@@ -4374,7 +4377,8 @@ function AccCompanyAssets() {
 
   // Brand-level uploaded assets land with branchId=null and never show in branch
   // screens until assigned. Surface them here and assign via PATCH .../assets/{id}.
-  const unassignedAssets = apiAssets.filter(isUnassignedAsset);
+  const unassignedAssets = (pendingAssetsResp?.data ?? []).filter(isUnassignedAsset);
+  const pendingCount = pendingAssetsResp?.meta?.summary?.pendingAssignment ?? unassignedAssets.length;
   const [assignBranch, setAssignBranch] = useState<Record<string,string>>({});
   const assignToBranch = (a:Asset) => {
     const patch = buildAssignPatch(assignBranch[a.id] ?? "");
@@ -4443,7 +4447,7 @@ function AccCompanyAssets() {
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2">
             <AlertTriangle size={16} className="text-amber-600"/>
-            <p className="font-bold text-gray-800 text-sm">{t("أصول بانتظار التخصيص لفرع","Assets awaiting branch assignment")} ({unassignedAssets.length})</p>
+            <p className="font-bold text-gray-800 text-sm">{t("أصول بانتظار التخصيص لفرع","Assets awaiting branch assignment")} ({pendingCount})</p>
             <Badge className="bg-amber-100 text-amber-700 border border-amber-200 text-[10px]">{t("مرفوعة على مستوى العلامة","Uploaded at brand level")}</Badge>
           </div>
           <p className="text-[11px] text-amber-700">{t("هذه الأصول مرفوعة على مستوى العلامة التجارية ولن تظهر في شاشات الفروع حتى تُخصَّص لفرع.","These assets were uploaded at the brand level and won't appear in branch screens until assigned to a branch.")}</p>

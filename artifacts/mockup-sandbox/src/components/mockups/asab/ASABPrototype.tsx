@@ -101,6 +101,8 @@ import {
   useAdminUploadTemplate,
   useAdminBrandUploadStatus,
   useAdminRestaurantEmployeeStatus,
+  useAdminBrandBranchesUploadStatus,
+  useAdminAccountantModules,
   useExportOperations,
   useExportHeadOperations,
   useExportAssets,
@@ -10222,7 +10224,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   // ── Distribution data ──
   const [headSel,  setHeadSel]   = useState<string|null>("h1");
   const [accSel,   setAccSel]    = useState<string|null>("acc1");
-  type DistAcc = { id:string; name:string; avatar:string; headId:string|null; restaurants:string[] };
+  type DistAcc = { id:string; name:string; avatar:string; headId:string|null; restaurants:string[]; restaurantCount?:number; moduleCount?:number };
   // Distribution data is driven entirely by GET /admin/distribution. No static fallback.
   const [distAccs, setDistAccs]  = useState<DistAcc[]>([]);
   useEffect(() => {
@@ -10287,7 +10289,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   // Heads assignment (mode 3) state
   const [h3AccSel, setH3AccSel] = useState<string|null>(null);
   const [h3HeadFilter, setH3HeadFilter] = useState("");
-  // accModules: accId → restName → modules[]. Seeded from the distribution API; no static seed.
+  // accModules: accId → restId → modules[]. Seeded from the distribution API; no static seed.
   const [accModules, setAccModules] = useState<Record<string,Record<string,string[]>>>({});
   useEffect(() => {
     const accs = (distApi as any)?.accountants;
@@ -10300,6 +10302,20 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
     }
     if (Object.keys(seed).length > 0) setAccModules(seed);
   }, [distApi]);
+  // Dedicated per-accountant matrix (named restaurants + moduleCatalog + reason).
+  // Only fires while the module-distribution tab is open for the selected accountant.
+  const { data: accModulesApi } = useAdminAccountantModules(
+    distModeType === "module" ? modAccSel : null,
+  );
+  // Seed the matrix from the dedicated endpoint, keyed by restaurant id, so the
+  // optimistic toggle has an accurate baseline (the distribution seed was by name).
+  useEffect(() => {
+    const rests = (accModulesApi as any)?.restaurants;
+    if (!modAccSel || !Array.isArray(rests)) return;
+    const cells: Record<string,string[]> = {};
+    for (const r of rests) { if (r?.id) cells[r.id] = Array.isArray(r.modules) ? r.modules : []; }
+    setAccModules(p => ({ ...p, [modAccSel]: cells }));
+  }, [accModulesApi, modAccSel]);
   // Contract 1.9: PUT /admin/accountants/{accId}/restaurants/{restaurant}/modules
   const toggleModuleForRest = (accId:string, rest:string, mod:string) => {
     const cur = accModules[accId]?.[rest] ?? [];
@@ -10307,8 +10323,8 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
     setAccModules(p => ({ ...p, [accId]: { ...(p[accId]??{}), [rest]: next } }));
     modulesMut.mutate({ accId, restaurant: rest, modules: next });
   };
-  const assignAllModules = (accId:string, rest:string) => {
-    const allKeys = DIST_MODULES.map(m=>m.value);
+  const assignAllModules = (accId:string, rest:string, keys?:string[]) => {
+    const allKeys = keys ?? DIST_MODULES.map(m=>m.value);
     setAccModules(p => ({ ...p, [accId]: { ...(p[accId]??{}), [rest]: allKeys } }));
     modulesMut.mutate({ accId, restaurant: rest, modules: allKeys });
   };
@@ -10568,8 +10584,11 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                   </div>
                   <div className="divide-y divide-gray-100 overflow-y-auto flex-1" style={{maxHeight:340}}>
                     {distAccs.filter(a=>!modAccFilter||a.name.includes(modAccFilter)).map(acc=>{
-                      const modCount = Object.values(accModules[acc.id]??{}).reduce((s,m)=>s+m.length,0);
-                      const restCount = Object.keys(accModules[acc.id]??{}).length;
+                      // Counts come from the API (restaurantCount/moduleCount) — the
+                      // stored restaurant_ids are empty by design for accountants, so
+                      // never derive the count from them. Fall back to the local matrix.
+                      const modCount = acc.moduleCount ?? Object.values(accModules[acc.id]??{}).reduce((s,m)=>s+m.length,0);
+                      const restCount = acc.restaurantCount ?? Object.keys(accModules[acc.id]??{}).length;
                       return (
                         <button key={acc.id} onClick={()=>{ setModAccSel(acc.id); setModAccFilter(""); }}
                           className={`w-full flex items-center gap-3 px-4 py-3.5 text-right transition-colors ${modAccSel===acc.id?"bg-blue-50/60 border-r-2 border-blue-500":"hover:bg-gray-50"}`}>
@@ -10593,8 +10612,23 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                   {(()=>{
                     const acc = distAccs.find(a=>a.id===modAccSel);
                     if(!acc) return <div className="flex items-center justify-center h-40 text-gray-400 text-sm">{t("اختر محاسباً","Select an accountant")}</div>;
-                    const accRests = acc.restaurants;
-                    if(accRests.length===0) return (
+                    // Prefer the dedicated /accountants/{id}/modules matrix (named
+                    // restaurants + moduleCatalog); fall back to the distribution seed.
+                    const apiRests = Array.isArray((accModulesApi as any)?.restaurants) ? (accModulesApi as any).restaurants as any[] : null;
+                    const apiCatalog = Array.isArray((accModulesApi as any)?.moduleCatalog) && (accModulesApi as any).moduleCatalog.length
+                      ? ((accModulesApi as any).moduleCatalog as any[]).map(m=>({ value: m.key ?? m.value, label: m.labelAr ?? m.labelEn ?? m.key ?? m.value })).filter(m=>m.value)
+                      : null;
+                    const COLS = apiCatalog ?? DIST_MODULES;
+                    const rows: {id:string;name:string}[] = apiRests
+                      ? apiRests.map(r=>({ id: r.id, name: r.name ?? restName(r.id).split("—")[0].trim() }))
+                      : acc.restaurants.map((rest:string)=>({ id: rest, name: restName(rest).split("—")[0].trim() }));
+                    if((accModulesApi as any)?.reason === "NO_COVERED_RESTAURANTS") return (
+                      <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-400">
+                        <p className="text-sm">{t("لا يوجد براند مخصّص لهذا المحاسب","No brand assigned to this accountant")}</p>
+                        <p className="text-xs">{t("عيّن براند للمحاسب أولاً من الطريقة الأولى","Assign a brand to the accountant first using method 1")}</p>
+                      </div>
+                    );
+                    if(rows.length===0) return (
                       <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-400">
                         <p className="text-sm">{t("لا توجد مطاعم مخصصة لهذا المحاسب","No restaurants assigned to this accountant")}</p>
                         <p className="text-xs">{t("قم بتخصيص مطاعم أولاً من الطريقة الأولى","Assign restaurants first using method 1")}</p>
@@ -10606,11 +10640,11 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                           <div className="flex items-center justify-between">
                             <p className="font-bold text-gray-800 text-sm">{t("مصفوفة الموديولات","Module Matrix")} — {acc.name}</p>
                             <div className="flex items-center gap-2">
-                              <button onClick={()=>accRests.forEach(r=>assignAllModules(modAccSel,r))}
+                              <button onClick={()=>rows.forEach(r=>assignAllModules(modAccSel,r.id,COLS.map(m=>m.value)))}
                                 className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700">
                                 ✓ {t("تمكين الكل","Enable all")}
                               </button>
-                              <button onClick={()=>accRests.forEach(r=>clearRestModules(modAccSel,r))}
+                              <button onClick={()=>rows.forEach(r=>clearRestModules(modAccSel,r.id))}
                                 className="px-2.5 py-1 rounded-lg text-[10px] font-semibold bg-gray-200 text-gray-700 hover:bg-gray-300">
                                 ✕ {t("إلغاء الكل","Clear all")}
                               </button>
@@ -10628,27 +10662,27 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                             <thead>
                               <tr className="bg-gray-50 border-b border-gray-100">
                                 <th className="px-4 py-2.5 text-xs font-bold text-gray-500 text-right min-w-[140px]">{t("المطعم","Restaurant")}</th>
-                                {DIST_MODULES.map(m=>(
+                                {COLS.map(m=>(
                                   <th key={m.value} className="px-2 py-2.5 text-[10px] font-bold text-gray-400 text-center min-w-[60px]" title={m.label}>{m.label.slice(0,5)}</th>
                                 ))}
                                 <th className="px-3 py-2.5 text-[10px] font-bold text-gray-400 text-center">الكل</th>
                               </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-50">
-                              {accRests.filter(r=>!modRestFilter||r.includes(modRestFilter)).map((rest,ri)=>{
-                                const mods = accModules[modAccSel]?.[rest] ?? [];
-                                const allChecked = DIST_MODULES.every(m=>mods.includes(m.value));
+                              {rows.filter(r=>!modRestFilter||r.name.includes(modRestFilter)).map((row,ri)=>{
+                                const mods = accModules[modAccSel]?.[row.id] ?? [];
+                                const allChecked = COLS.every(m=>mods.includes(m.value));
                                 return (
-                                  <tr key={rest} className={`hover:bg-gray-50/50 ${ri%2===1?"bg-gray-50/30":""}`}>
+                                  <tr key={row.id} className={`hover:bg-gray-50/50 ${ri%2===1?"bg-gray-50/30":""}`}>
                                     <td className="px-4 py-2.5">
-                                      <p className="text-xs font-semibold text-gray-700">{rest.split("—")[0].trim()}</p>
-                                      <p className="text-[10px] text-gray-400">{mods.length}/{DIST_MODULES.length} موديول</p>
+                                      <p className="text-xs font-semibold text-gray-700">{row.name}</p>
+                                      <p className="text-[10px] text-gray-400">{mods.length}/{COLS.length} موديول</p>
                                     </td>
-                                    {DIST_MODULES.map(m=>{
+                                    {COLS.map(m=>{
                                       const checked = mods.includes(m.value);
                                       return (
                                         <td key={m.value} className="px-2 py-2.5 text-center">
-                                          <button onClick={()=>toggleModuleForRest(modAccSel,rest,m.value)}
+                                          <button onClick={()=>toggleModuleForRest(modAccSel,row.id,m.value)}
                                             className={`w-6 h-6 rounded-md flex items-center justify-center mx-auto transition-all ${checked?"bg-purple-600 text-white shadow-sm":"bg-gray-100 text-gray-400 hover:bg-purple-100 hover:text-purple-600"}`}>
                                             {checked ? <Check size={11}/> : <span className="text-[10px]">—</span>}
                                           </button>
@@ -10656,7 +10690,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                                       );
                                     })}
                                     <td className="px-3 py-2.5 text-center">
-                                      <button onClick={()=>allChecked?clearRestModules(modAccSel,rest):assignAllModules(modAccSel,rest)}
+                                      <button onClick={()=>allChecked?clearRestModules(modAccSel,row.id):assignAllModules(modAccSel,row.id,COLS.map(m=>m.value))}
                                         className={`w-6 h-6 rounded-md flex items-center justify-center mx-auto transition-all ${allChecked?"bg-emerald-500 text-white":"bg-gray-200 text-gray-500 hover:bg-emerald-100"}`}>
                                         {allChecked ? <Check size={11}/> : <Plus size={9}/>}
                                       </button>
@@ -11267,6 +11301,27 @@ function AdminRestaurants({}: PageProps) {
     [uploadBrand, brandsApi],
   );
   const restEmpStatus = useAdminRestaurantEmployeeStatus(uploadRestIds);
+  // Per-branch fixed-assets status (done/failed/not_uploaded) — the whole column
+  // in one call. Brand upload-status never tracked per-branch assets, so the
+  // column was stuck on «لم يُرفع» before this.
+  const { data: branchesAssetStatus } = useAdminBrandBranchesUploadStatus(uploadBrand);
+  const { branchAssetStatusMap, branchAssetReasonMap } = useMemo(() => {
+    const raw: any = (branchesAssetStatus as any)?.branches ?? branchesAssetStatus ?? [];
+    const map: Record<string, "done" | "failed" | "not_uploaded"> = {};
+    const reasons: Record<string, string> = {};
+    const put = (id:string, v:any) => {
+      if (!id) return;
+      map[id] = (v?.fixedAssetsStatus ?? v?.status ?? v) as any;
+      const r = v?.fixedAssetsFailureReason ?? v?.reason;
+      if (r) reasons[id] = r;
+    };
+    if (Array.isArray(raw)) {
+      for (const b of raw) put(b?.branchId ?? b?.id, b);
+    } else if (raw && typeof raw === "object") {
+      for (const [id, v] of Object.entries(raw)) put(id, v);
+    }
+    return { branchAssetStatusMap: map, branchAssetReasonMap: reasons };
+  }, [branchesAssetStatus]);
   // Last failure per card key, so INVALID_HEADER can show expected vs received.
   const [uploadErrors, setUploadErrors] = useState<Record<string, any>>({});
   const noteUploadError = (key:string, e:unknown) => {
@@ -11283,6 +11338,16 @@ function AdminRestaurants({}: PageProps) {
     const rows = res?.errors ?? [];
     if (rows.length) setUploadErrors(p=>({ ...p, [key]: { code:"ROW_ERRORS", rows } }));
     else clearUploadError(key);
+  };
+  // Surface post-upload outcome for the shared catalog (T-BUG-9): how many branches
+  // got seeded, and the NO_BRANCHES_LINKED warning (uploaded OK but invisible in app).
+  const noteUploadOutcome = (res:any) => {
+    const seeded = res?.branchesSeeded;
+    if (typeof seeded === "number" && seeded > 0)
+      toast.success(t(`تم زرع الأصناف في ${seeded} فرع`, `Seeded into ${seeded} branches`));
+    const warns:string[] = Array.isArray(res?.warnings) ? res.warnings : [];
+    if (warns.includes("NO_BRANCHES_LINKED"))
+      toast.warning(t("تم الرفع لكن لا توجد فروع مربوطة — الأصناف لن تظهر في التطبيق حتى تُربط الفروع","Uploaded, but no linked branches — items won't appear in the app until branches are linked"));
   };
 
   // Per-restaurant subscription state
@@ -11371,6 +11436,18 @@ function AdminRestaurants({}: PageProps) {
         const apiAssetsDone = ((brandUploadStatus as any)?.assets ?? {}) as Record<string,boolean>;
         const restEmpDone = (rid:string) => Boolean(restEmpStatus[rid]) || (brandUploads[empKey(rid)]?.employees ?? false);
         const setRestEmp  = (rid:string) => setUploaded(empKey(rid),"employees");
+        // A branch's fixed-assets are "done" when the per-branch endpoint says so;
+        // otherwise fall back to the legacy brand map then the optimistic flip.
+        const branchAssetDone = (branchId:string, aKey:string) =>
+          branchAssetStatusMap[branchId]==="done"
+          || (branchAssetStatusMap[branchId]===undefined && (Boolean(branchId && apiAssetsDone[branchId]) || (branchAssets[aKey]??false)));
+        const branchAssetDoneCount = selBrand.restaurants.flatMap((r:any)=>
+          r.branches.map((br:any,bi:number)=>{
+            const bid = typeof br==="string" ? "" : (br?.id ?? "");
+            return branchAssetDone(bid, bid || `${uploadBrand}_${r.id}_${bi}`);
+          })
+        ).filter(Boolean).length;
+        const branchTotalCount = selBrand.restaurants.reduce((s:number,r:any)=>s+r.branches.length,0);
 
         // Renders EMPTY_FILE / INVALID_HEADER (expected vs received) and per-row errors.
         const UploadErrorBox = ({ err }:{ err:any }) => {
@@ -11507,7 +11584,7 @@ function AdminRestaurants({}: PageProps) {
                   colColor="bg-orange-50 text-orange-700"
                   done={sharedDone.materials} countLabel={t("تم الرفع ✓","Uploaded ✓")}
                   busy={uploadBrandMut.isPending} err={uploadErrors["raw-materials"]} templateType="raw-materials"
-                  onUpload={(file)=>{ clearUploadError("raw-materials"); uploadBrandMut.mutate({ brandId:uploadBrand, type:"raw-materials", file }, { onSuccess:(r)=>noteRowErrors("raw-materials",r), onError:(e)=>noteUploadError("raw-materials",e) }); }}
+                  onUpload={(file)=>{ clearUploadError("raw-materials"); uploadBrandMut.mutate({ brandId:uploadBrand, type:"raw-materials", file }, { onSuccess:(r)=>{ noteRowErrors("raw-materials",r); noteUploadOutcome(r); }, onError:(e)=>noteUploadError("raw-materials",e) }); }}
                 />
                 <UploadCard
                   icon={<Truck size={16} className="text-teal-600"/>} iconBg="bg-teal-100"
@@ -11594,8 +11671,7 @@ function AdminRestaurants({}: PageProps) {
                   <p className="text-[11px] text-gray-400">{t("كل فرع له قائمة أصول ثابتة مستقلة (معدات، أجهزة، مفروشات...)","Each branch has its own fixed assets list (equipment, devices, furniture...)")}</p>
                 </div>
                 <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700">
-                  {selBrand.restaurants.flatMap((r,_)=>r.branches.map((_,bi)=>branchAssets[`${uploadBrand}_${r.id}_${bi}`]??false)).filter(Boolean).length}
-                  /{selBrand.restaurants.reduce((s,r)=>s+r.branches.length,0)} {t("فرع","branches")}
+                  {branchAssetDoneCount}/{branchTotalCount} {t("فرع","branches")}
                 </span>
               </div>
               <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
@@ -11611,7 +11687,10 @@ function AdminRestaurants({}: PageProps) {
                     // old index-based key broke as soon as branches reordered.
                     const branchId = typeof br === "string" ? "" : (br?.id ?? "");
                     const aKey = branchId || `${uploadBrand}_${rest.id}_${bi}`;
-                    const done = Boolean(branchId && apiAssetsDone[branchId]) || (branchAssets[aKey]??false);
+                    // Prefer the per-branch endpoint's tri-state; fall back to the
+                    // (legacy, usually empty) brand map, then the optimistic flip.
+                    const failed = branchId ? branchAssetStatusMap[branchId] === "failed" : false;
+                    const done = branchAssetDone(branchId, aKey);
                     const errKey = `asset_${aKey}`;
                     return (
                       <div key={aKey} className="border-b border-gray-50 last:border-0">
@@ -11631,6 +11710,8 @@ function AdminRestaurants({}: PageProps) {
                         <div className="text-center">
                           {done
                             ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={9}/> {t("مرفوع","Uploaded")}</span>
+                            : failed
+                            ? <span title={branchId ? branchAssetReasonMap[branchId] : undefined} className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-700 bg-red-50 px-2 py-0.5 rounded-full cursor-help"><AlertTriangle size={9}/> {t("فشل الرفع","Upload failed")}</span>
                             : <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full"><Clock size={9}/> {t("لم يُرفع","Not Uploaded")}</span>
                           }
                         </div>
@@ -11666,8 +11747,7 @@ function AdminRestaurants({}: PageProps) {
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-emerald-100">
                   <p className="text-base font-extrabold text-emerald-700">
-                    {selBrand.restaurants.flatMap((r,_)=>r.branches.map((_,bi)=>branchAssets[`${uploadBrand}_${r.id}_${bi}`]??false)).filter(Boolean).length}
-                    /{selBrand.restaurants.reduce((s,r)=>s+r.branches.length,0)}
+                    {branchAssetDoneCount}/{branchTotalCount}
                   </p>
                   <p className="text-[10px] text-emerald-500 mt-0.5">{t("أصول الفروع","Branch Assets")}</p>
                 </div>
@@ -11824,6 +11904,11 @@ function AdminRestaurants({}: PageProps) {
                     <p className="font-bold text-gray-800">{brand.name}</p>
                     <Badge className={`text-[10px] bg-purple-50 text-purple-600`}>باقة {brand.plan}</Badge>
                     <Badge className={`text-[10px] ${subCls[brand.subStatus]}`}>{subLbl[brand.subStatus]}</Badge>
+                    {(brand as any).branchesLinked===0 && branchCount>0 && (
+                      <span title={t("لا توجد فروع مربوطة بمطاعم — لن تظهر بيانات الفروع في التطبيق","No branches linked to restaurants — branch data won't appear in the app")}>
+                        <Badge className="text-[10px] bg-red-50 text-red-700 border border-red-200">{t("فروع غير مربوطة","Unlinked branches")}</Badge>
+                      </span>
+                    )}
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">{brand.owner} · {brand.ownerEmail}</p>
                 </div>
@@ -11831,6 +11916,9 @@ function AdminRestaurants({}: PageProps) {
                   <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{restCount}</p><p className="text-[10px] text-gray-400">{t("مطعم","Restaurant")}</p></div>
                   <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{branchCount}</p><p className="text-[10px] text-gray-400">{t("فرع","Branch")}</p></div>
                   <div className="text-center hidden md:block"><p className="text-base font-bold text-gray-800">{(brand as any).moduleCount ?? (brand.modules.length || 9)}</p><p className="text-[10px] text-gray-400">{t("موديول","Module")}</p></div>
+                  {(brand as any).branchesLinked!=null && (
+                    <div className="text-center hidden md:block"><p className={`text-base font-bold ${(brand as any).branchesLinked===0?"text-red-600":"text-gray-800"}`}>{(brand as any).branchesLinked}/{branchCount}</p><p className="text-[10px] text-gray-400">{t("مربوط","Linked")}</p></div>
+                  )}
                   {brand.ownerEmail && (
                     <button
                       onClick={(e)=>{ e.stopPropagation(); if(resetOwnerMut.isPending) return; if(window.confirm(t(`إرسال باسورد جديد إلى ${brand.ownerEmail}؟`,`Send a new password to ${brand.ownerEmail}?`))) resetOwnerMut.mutate({ brandId:brand.id }); }}
@@ -15478,6 +15566,15 @@ function SupItems({}: PageProps) {
   const [form, setForm] = useState(blank);
   const [editId, setEditId] = useState<string|null>(null);
   const [editForm, setEditForm] = useState(blank);
+  // 409 SUPPLIER_RECORD_AMBIGUOUS → the supplier login maps to >1 record; let the
+  // user pick which supplierId to attach the item to, then resubmit.
+  const [ambigSuppliers, setAmbigSuppliers] = useState<{id:string;name:string}[]>([]);
+  const [pickedSupplierId, setPickedSupplierId] = useState("");
+  const supWarnLabel = (w:string):string => ({
+    ITEM_NAME_TAKEN: t("اسم الصنف مستخدم من قبل","Item name already taken"),
+    NO_BRANCH_AVAILABILITY: t("لا توجد فروع متاحة لعرض الصنف في التطبيق","No branches available to show the item in the app"),
+    NO_MOBILE_SUPPLIER_LOGIN: t("المورد ليس له حساب دخول على التطبيق — الصنف لن يظهر لموظف المشتريات","Supplier has no mobile login — the item won't appear for the procurement officer"),
+  } as Record<string,string>)[w] ?? w;
   // Build the write body from a form; only send priceHalalas when a price is typed.
   const bodyOf = (f:typeof blank) => ({
     name: f.name.trim(),
@@ -15491,7 +15588,26 @@ function SupItems({}: PageProps) {
   });
   const submitItem = () => {
     if (!form.name.trim()) return;
-    createItemMut.mutate(bodyOf(form) as any, { onSuccess: () => { setShowAdd(false); setForm(blank); } });
+    const body:any = bodyOf(form);
+    if (pickedSupplierId) body.supplierId = pickedSupplierId;
+    createItemMut.mutate(body, {
+      onSuccess: (created:any) => {
+        setShowAdd(false); setForm(blank); setAmbigSuppliers([]); setPickedSupplierId("");
+        // BUG-9 bridge visibility: the item is saved, but tell the supplier whether
+        // it actually reached the procurement app + surface any soft warnings.
+        if (created?.publishedToApp === false)
+          toast.warning(t("تم الحفظ لكن الصنف لسه مش ظاهر في تطبيق المشتريات","Saved, but the item isn't visible in the procurement app yet"));
+        (Array.isArray(created?.warnings) ? created.warnings : []).forEach((w:string)=>toast.warning(supWarnLabel(w)));
+      },
+      onError: (e:any) => {
+        if (e?.code === "SUPPLIER_RECORD_AMBIGUOUS") {
+          const cands = (e?.details?.suppliers ?? e?.details?.candidates ?? []) as any[];
+          setAmbigSuppliers(cands.map((c:any)=>({ id: c.id ?? c.supplierId, name: c.name ?? c.supplierName ?? c.id })).filter((c:any)=>c.id));
+          toast.info(t("فيه أكتر من سجل مورد مرتبط بحسابك — اختر المورد وأعد الإضافة","Multiple supplier records match your account — pick one and add again"));
+        }
+        // Other errors are toasted by the mutation hook itself.
+      },
+    });
   };
   const openEdit = (it:any) => { setEditId(it.id); setEditForm({ name:it.name ?? "", code:it.code ?? "", unit:it.unit ?? "", minQty:it.minQty!=null?String(it.minQty):"", maxQty:it.maxQty!=null?String(it.maxQty):"", price:priceSar(it)!=null?String(priceSar(it)):"", leadTimeDays:it.leadTimeDays!=null?String(it.leadTimeDays):"", available:isAvailable(it) }); };
   const submitEdit = () => {
@@ -15564,7 +15680,16 @@ function SupItems({}: PageProps) {
                 <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("مدة التحضير (يوم)","Lead Time (days)")}</label><input type="number" value={f.leadTimeDays} onChange={e=>setF(v=>({...v,leadTimeDays:e.target.value}))} dir="ltr" className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300"/></div>
                 <div className="flex items-end gap-2"><label className="text-[11px] font-semibold text-gray-500">{t("متاح","Available")}</label><input type="checkbox" checked={f.available} onChange={e=>setF(v=>({...v,available:e.target.checked}))} className="w-4 h-4 mb-2"/></div>
               </div>
-              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={close}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={isEdit?submitEdit:submitItem} disabled={!f.name.trim()||busy}><Plus size={12}/> {isEdit?t("حفظ","Save"):t("إضافة","Add")}</Btn></div>
+              {!isEdit && ambigSuppliers.length>0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-2.5 space-y-1.5">
+                  <p className="text-[11px] font-bold text-amber-800">{t("اختر سجل المورد","Choose supplier record")}</p>
+                  <select value={pickedSupplierId} onChange={e=>setPickedSupplierId(e.target.value)} className="w-full text-sm border border-amber-200 rounded-lg px-2 py-2 bg-white outline-none">
+                    <option value="">{t("— اختر —","— select —")}</option>
+                    {ambigSuppliers.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="flex gap-2 justify-end pt-1"><Btn size="sm" onClick={close}>{t("إلغاء","Cancel")}</Btn><Btn size="sm" variant="primary" onClick={isEdit?submitEdit:submitItem} disabled={!f.name.trim()||busy||(!isEdit&&ambigSuppliers.length>0&&!pickedSupplierId)}><Plus size={12}/> {isEdit?t("حفظ","Save"):t("إضافة","Add")}</Btn></div>
             </div>
           </div>
         </div>

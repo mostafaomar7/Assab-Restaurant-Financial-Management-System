@@ -363,6 +363,8 @@ export interface AssetFilter {
   category?: string;
   status?: string;
   branchId?: string;
+  /** Assignment state: pending = branch_id null (awaiting assignment). Default = all incl. pending. */
+  assignment?: "pending" | "assigned" | "all";
   page?: number;
   pageSize?: number;
 }

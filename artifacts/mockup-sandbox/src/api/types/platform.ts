@@ -290,6 +290,44 @@ export interface AdminRestaurantUploadStatus {
   completionPct?: number;
 }
 
+/** One branch row from GET /admin/brands/{id}/branches/upload-status. */
+export interface AdminBranchFixedAssetsRow {
+  branchId?: string;
+  branchName?: string;
+  restaurantId?: string;
+  /** Tri-state so a failed upload is distinguishable from a never-uploaded one. */
+  fixedAssetsStatus?: "done" | "failed" | "not_uploaded";
+  fixedAssetsFailureReason?: string | null;
+  reason?: string | null;
+}
+
+/** GET /admin/brands/{id}/branches/upload-status — the whole fixed-assets column in one call. */
+export interface AdminBrandBranchesUploadStatus {
+  brandId?: string;
+  branches?: AdminBranchFixedAssetsRow[];
+}
+
+/** One restaurant row in the accountant module matrix. */
+export interface AdminAccountantModuleRow {
+  id: string;
+  name?: string;
+  modules?: string[];
+}
+
+/**
+ * GET /admin/accountants/{id}/modules — per-restaurant module matrix, named.
+ * `reason: "NO_COVERED_RESTAURANTS"` means the accountant isn't assigned to any brand yet.
+ */
+export interface AdminAccountantModulesResponse {
+  accountantId?: string;
+  accountantName?: string;
+  brandName?: string;
+  restaurants?: AdminAccountantModuleRow[];
+  moduleCatalog?: Array<{ key: string; labelAr?: string; labelEn?: string }>;
+  availableModules?: string[];
+  reason?: string | null;
+}
+
 /** Shared result shape for every admin upload endpoint. */
 export interface AdminUploadResult {
   uploadId?: string;
@@ -297,6 +335,10 @@ export interface AdminUploadResult {
   uploadedCount?: number;
   employeeCount?: number;
   assetCount?: number;
+  /** raw-materials: how many branches got the catalog seeded. */
+  branchesSeeded?: number;
+  /** e.g. "NO_BRANCHES_LINKED" — uploaded OK but nothing shows in the app. */
+  warnings?: string[];
   status?: "done" | "failed" | "queued" | "processing";
   errors?: Array<{ row: number; message: string }>;
 }

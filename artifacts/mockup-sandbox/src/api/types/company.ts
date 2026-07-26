@@ -697,6 +697,8 @@ export interface AssetDraft {
 
 /** Fixed-assets register KPI tiles (T05 §9 meta.summary). */
 export interface AssetsSummary {
+  /** Brand-level uploaded assets still awaiting assignment to a branch (branch_id=null). */
+  pendingAssignment?: number;
   pendingAccountant: number;
   pendingBranch: number;
   confirmed: number;
