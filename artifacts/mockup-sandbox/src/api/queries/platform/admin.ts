@@ -11,6 +11,7 @@ import type {
   AdminAuditLogEntry,
   AdminBrand,
   AdminBranch,
+  AdminUnlinkedBranchesResponse,
   AdminBranchUploadStatus,
   AdminBrandUploadStatus,
   AdminBrandUploadType,
@@ -583,6 +584,44 @@ export function useDeleteAdminBranch() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform", "admin", "branches"] });
       toast.success("تم حذف الفرع");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+// ─── Link unlinked branches to a restaurant (2026-07-27) ──────────────────────
+// Candidates + the restaurant picker options come back in ONE call: rows in
+// `data`, dropdown options in `meta.restaurants`.
+export function useAdminUnlinkedBranches(
+  brandId: string | null | undefined,
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["platform", "admin", "brands", brandId ?? "", "unlinked-branches"],
+    enabled: Boolean(brandId) && (opts.enabled ?? true),
+    queryFn: async () => {
+      const res = await api.get<AdminUnlinkedBranchesResponse>(
+        `/admin/brands/${brandId}/branches`,
+        { params: { linked: "false" } },
+      );
+      return res.data;
+    },
+  });
+}
+
+// Link one branch to a restaurant. The backend derives brand/company from the
+// restaurant, so only restaurantId is sent. No per-call toast — the caller drives
+// a bulk loop and aggregates the outcome. Brands tree is invalidated on success.
+export function useLinkBranch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, restaurantId }: { id: string; restaurantId: string }) => {
+      const res = await api.patch<AdminBranch>(`/admin/branches/${id}`, { restaurantId });
+      return res.data;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "branches"] });
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

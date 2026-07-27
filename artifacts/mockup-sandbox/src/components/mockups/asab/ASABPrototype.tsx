@@ -82,6 +82,8 @@ import {
   useCreateAdminRestaurant,
   useCreateAdminSubscription,
   useCreateAdminBranch,
+  useAdminUnlinkedBranches,
+  useLinkBranch,
   useAdminBranchRequests,
   useApproveBranchRequest,
   useRejectBranchRequest,
@@ -234,6 +236,7 @@ import {
   useCloseShift,
   useExportShifts,
 } from "../../../api/queries";
+import { isApiError } from "../../../api/errors";
 import { NotificationBell } from "../../shared/NotificationBell";
 import { GlobalSearch } from "../../shared/GlobalSearch";
 import { ClarifyModal } from "../../shared/ClarifyModal";
@@ -11257,6 +11260,7 @@ function AdminRestaurants({}: PageProps) {
   const [expandedRest,  setExpandedRest]    = useState<string|null>(null);
   const [expandedSub,   setExpandedSubR]    = useState<string|null>(null);
   const [showAddBrand,  setShowAddBrand]    = useState(false);
+  const [linkBrand,     setLinkBrand]       = useState<{id:string;name:string}|null>(null);
   const [showAddRest,   setShowAddRest]     = useState<string|null>(null);
   const [restTab, setRestTab]               = useState<"structure"|"upload">("structure");
   type UploadKey = "sales"|"materials"|"employees"|"suppliers";
@@ -11897,6 +11901,10 @@ function AdminRestaurants({}: PageProps) {
           const isExpanded = expandedBrand===brand.id;
           const restCount  = brand.restaurants.length;
           const branchCount = brand.restaurants.reduce((s,r)=>s+r.branches.length,0);
+          // 2026-07-27: prefer branchCounts.unlinked from the tree; fall back to the
+          // old branchesLinked===0 heuristic for a backend that hasn't shipped it yet.
+          const unlinkedCount = (brand as any).branchCounts?.unlinked
+            ?? (((brand as any).branchesLinked===0 && branchCount>0) ? branchCount : 0);
           const subCls = { active:"bg-emerald-50 text-emerald-700", warning:"bg-amber-50 text-amber-700", danger:"bg-red-50 text-red-700", expired:"bg-red-100 text-red-800" };
           const subLbl = { active:t("اشتراك نشط","Active Subscription"), warning:t("ينتهي قريباً","Expiring Soon"), danger:t("إنذار انتهاء","Expiry Alert"), expired:t("منتهي الاشتراك","Subscription Expired") };
 
@@ -11911,10 +11919,16 @@ function AdminRestaurants({}: PageProps) {
                     <p className="font-bold text-gray-800">{brand.name}</p>
                     <Badge className={`text-[10px] bg-purple-50 text-purple-600`}>باقة {brand.plan}</Badge>
                     <Badge className={`text-[10px] ${subCls[brand.subStatus]}`}>{subLbl[brand.subStatus]}</Badge>
-                    {(brand as any).branchesLinked===0 && branchCount>0 && (
-                      <span title={t("لا توجد فروع مربوطة بمطاعم — لن تظهر بيانات الفروع في التطبيق","No branches linked to restaurants — branch data won't appear in the app")}>
-                        <Badge className="text-[10px] bg-red-50 text-red-700 border border-red-200">{t("فروع غير مربوطة","Unlinked branches")}</Badge>
+                    {unlinkedCount>0 && (
+                      <span title={t("فروع غير مربوطة بمطاعم — لن تظهر بياناتها في التطبيق حتى تُربط","Branches not linked to a restaurant — their data won't appear in the app until linked")}>
+                        <Badge className="text-[10px] bg-red-50 text-red-700 border border-red-200">{unlinkedCount} {t("فرع غير مربوط","unlinked")}</Badge>
                       </span>
+                    )}
+                    {unlinkedCount>0 && (
+                      <button onClick={(e)=>{ e.stopPropagation(); setLinkBrand({ id: brand.id, name: brand.name }); }}
+                        className="text-[10px] font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-lg px-2 py-0.5">
+                        🔗 {t("اربط الفروع","Link branches")}
+                      </button>
                     )}
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">{brand.owner} · {brand.ownerEmail}</p>
@@ -12040,6 +12054,104 @@ function AdminRestaurants({}: PageProps) {
       </div>
       </div>
       )}
+
+      {linkBrand && <LinkBranchesModal brand={linkBrand} onClose={()=>setLinkBrand(null)}/>}
+    </div>
+  );
+}
+
+// ── Link unlinked branches to a restaurant (2026-07-27) ───────────────────────
+// Rows come from GET /admin/brands/{id}/branches?linked=false (data); the
+// restaurant dropdown options come from the SAME response (meta.restaurants).
+// Linking is a per-row PATCH; a bulk save loops them, aggregating failures.
+function LinkBranchesModal({ brand, onClose }:{ brand:{id:string;name:string}; onClose:()=>void }) {
+  const { t, dir } = useLang();
+  const { data: apiData, isLoading } = useAdminUnlinkedBranches(brand.id);
+  const linkMut = useLinkBranch();
+  const rows = (apiData?.data ?? []) as any[];
+  const restOptions = (apiData?.meta?.restaurants ?? []) as { id:string; name:string }[];
+  // Per-branch chosen restaurant id.
+  const [picks, setPicks] = useState<Record<string,string>>({});
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<Record<string,boolean>>({});
+  const chosen = rows.filter(r=>!done[r.id] && picks[r.id]);
+  const canSave = !busy && chosen.length>0;
+
+  const save = async () => {
+    if (!canSave) return;
+    setBusy(true);
+    const errors: string[] = [];
+    // Sequential — one failure doesn't stop the rest; collect and report at the end.
+    for (const r of chosen) {
+      try {
+        await linkMut.mutateAsync({ id: r.id, restaurantId: picks[r.id] });
+        setDone(p=>({ ...p, [r.id]: true }));
+      } catch (e) {
+        errors.push(`${r.name}: ${isApiError(e) ? (e.messageAr || e.message) : t("فشل","failed")}`);
+      }
+    }
+    setBusy(false);
+    if (errors.length) toast.error(`${t("تعذّر ربط بعض الفروع:","Some branches couldn't be linked:")} ${errors.join(" · ")}`);
+    else toast.success(t("تم ربط الفروع بنجاح","Branches linked successfully"));
+  };
+
+  const remaining = rows.filter(r=>!done[r.id]);
+
+  return (
+    <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" dir={dir} onClick={onClose}>
+      <div className="bg-white rounded-2xl shadow-2xl w-[640px] max-w-full flex flex-col max-h-[90vh]" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <div>
+            <h3 className="font-bold text-gray-800 text-base">🔗 {t("ربط الفروع بالمطاعم","Link Branches to Restaurants")} — {brand.name}</h3>
+            <p className="text-xs text-gray-400 mt-0.5">{t("اختر المطعم لكل فرع ثم احفظ. الفرع غير المربوط لا تظهر بياناته في التطبيق.","Pick a restaurant for each branch and save. An unlinked branch's data doesn't appear in the app.")}</p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={18}/></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-6 py-4">
+          {isLoading && <div className="py-10 text-center text-sm text-gray-400">{t("جارٍ التحميل…","Loading…")}</div>}
+          {!isLoading && remaining.length===0 && (
+            <div className="py-10 text-center">
+              <CheckCircle2 size={26} className="text-emerald-500 mx-auto mb-2"/>
+              <p className="text-sm font-semibold text-gray-700">{t("لا توجد فروع غير مربوطة","No unlinked branches")}</p>
+            </div>
+          )}
+          {!isLoading && restOptions.length===0 && remaining.length>0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-3 text-xs text-amber-700">
+              {t("لا توجد مطاعم في هذه العلامة — أضف مطعماً أولاً لتربط الفروع به.","This brand has no restaurants — add one first to link branches to it.")}
+            </div>
+          )}
+          <div className="space-y-2">
+            {remaining.map(r=>(
+              <div key={r.id} className={`flex items-center gap-3 p-3 rounded-xl border ${done[r.id]?"border-emerald-200 bg-emerald-50/40":"border-gray-200"}`}>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-gray-800 truncate">{r.name}</p>
+                    <Badge className={`text-[9px] ${r.linkage==="orphan"?"bg-gray-100 text-gray-600":"bg-blue-50 text-blue-700"}`}>
+                      {r.linkage==="orphan"?t("فرع قديم بلا ربط","legacy · no link"):t("ناقص مطعم","brand · needs restaurant")}
+                    </Badge>
+                  </div>
+                  {r.city && <p className="text-[11px] text-gray-400">{r.city}</p>}
+                </div>
+                <select value={picks[r.id] ?? ""} disabled={busy || restOptions.length===0}
+                  onChange={e=>setPicks(p=>({ ...p, [r.id]: e.target.value }))}
+                  className="w-48 text-sm border border-gray-200 rounded-lg px-3 py-2 outline-none focus:border-purple-300 disabled:bg-gray-50">
+                  <option value="">{t("— اختر المطعم —","— Select restaurant —")}</option>
+                  {restOptions.map(o=><option key={o.id} value={o.id}>{o.name}</option>)}
+                </select>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-3 px-6 py-4 border-t border-gray-100">
+          <button onClick={onClose} className="px-5 py-2.5 rounded-xl border border-gray-200 text-gray-600 text-sm hover:bg-gray-50 mr-auto">{t("إغلاق","Close")}</button>
+          <button disabled={!canSave} onClick={save}
+            className={`px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors ${canSave?"bg-purple-600 text-white hover:bg-purple-700":"bg-gray-200 text-gray-400 cursor-not-allowed"}`}>
+            {busy ? t("جارٍ الربط…","Linking…") : `${t("ربط المحدد","Link selected")} (${chosen.length})`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

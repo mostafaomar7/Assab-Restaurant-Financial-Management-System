@@ -91,6 +91,35 @@ export interface AdminBrand {
   companyId?: string;
   status?: string;
   restaurants?: AdminRestaurant[];
+  /** 2026-07-27: linked/unlinked branch tallies straight from the brand tree. */
+  branchCounts?: { linked: number; unlinked: number };
+  /** Branches attributed to this brand but not yet under a restaurant. */
+  unlinkedBranches?: { id: string; name: string; city?: string }[];
+}
+
+/** A branch candidate for linking (GET /admin/brands/{id}/branches?linked=false). */
+export interface AdminUnlinkedBranch {
+  id: string;
+  name: string;
+  city?: string | null;
+  restaurantId?: string | null;
+  restaurantName?: string | null;
+  brandId?: string | null;
+  companyId?: string | null;
+  manager?: string | null;
+  status?: string;
+  /** "brand" = brand known, restaurant missing · "orphan" = no linkage at all. */
+  linkage?: "brand" | "orphan" | string;
+}
+
+export interface AdminUnlinkedBranchesResponse {
+  data: AdminUnlinkedBranch[];
+  meta: {
+    brandId: string;
+    linked: string;
+    total: number;
+    restaurants: { id: string; name: string }[];
+  };
 }
 
 export interface AdminRestaurant {
