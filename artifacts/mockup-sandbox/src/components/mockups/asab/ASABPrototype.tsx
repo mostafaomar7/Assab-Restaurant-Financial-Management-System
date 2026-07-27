@@ -10229,7 +10229,14 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
   const [distAccs, setDistAccs]  = useState<DistAcc[]>([]);
   useEffect(() => {
     const accs = (distApi as any)?.accountants;
-    if (Array.isArray(accs)) setDistAccs(accs as DistAcc[]);
+    // Normalize: the API may omit `restaurants` for an accountant, and code paths
+    // (e.g. the module matrix) call `.restaurants.map` directly — a missing array
+    // would white-screen the page. Guarantee the shape here.
+    if (Array.isArray(accs)) setDistAccs(accs.map((a:any)=>({
+      ...a,
+      restaurants: Array.isArray(a?.restaurants) ? a.restaurants : [],
+      headId: a?.headId ?? null,
+    })) as DistAcc[]);
   }, [distApi]);
   const distHeads = (Array.isArray((distApi as any)?.heads)
     ? (distApi as any).heads
@@ -10278,8 +10285,8 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
     { value:"shifts", label:"الشفتات" }, { value:"account_statement", label:"كشف الحساب" },
     { value:"cash_custody", label:"العهد النقدية" }, { value:"fixed_assets", label:"الأصول الثابتة" },
   ];
-  const lookupModules = (((modulesLookup as any)?.data ?? []) as any[])
-    .map(m => ({ value: m.value ?? m.key, label: m.labelAr ?? m.labelEn ?? m.value }))
+  const lookupModules = ((((modulesLookup as any)?.data ?? modulesLookup ?? []) as any[]))
+    .map(m => { const value = m.value ?? m.key; return { value, label: m.labelAr ?? m.labelEn ?? m.key ?? value }; })
     .filter(m => m.value);
   const DIST_MODULES = lookupModules.length ? lookupModules : MODULE_FALLBACK;
   const [distModeType, setDistModeType] = useState<"restaurant"|"module"|"heads">("restaurant");
@@ -10621,7 +10628,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                     const COLS = apiCatalog ?? DIST_MODULES;
                     const rows: {id:string;name:string}[] = apiRests
                       ? apiRests.map(r=>({ id: r.id, name: r.name ?? restName(r.id).split("—")[0].trim() }))
-                      : acc.restaurants.map((rest:string)=>({ id: rest, name: restName(rest).split("—")[0].trim() }));
+                      : (acc.restaurants ?? []).map((rest:string)=>({ id: rest, name: restName(rest).split("—")[0].trim() }));
                     if((accModulesApi as any)?.reason === "NO_COVERED_RESTAURANTS") return (
                       <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-400">
                         <p className="text-sm">{t("لا يوجد براند مخصّص لهذا المحاسب","No brand assigned to this accountant")}</p>
@@ -10662,9 +10669,9 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                             <thead>
                               <tr className="bg-gray-50 border-b border-gray-100">
                                 <th className="px-4 py-2.5 text-xs font-bold text-gray-500 text-right min-w-[140px]">{t("المطعم","Restaurant")}</th>
-                                {COLS.map(m=>(
-                                  <th key={m.value} className="px-2 py-2.5 text-[10px] font-bold text-gray-400 text-center min-w-[60px]" title={m.label}>{m.label.slice(0,5)}</th>
-                                ))}
+                                {COLS.map(m=>{ const lbl = String(m.label ?? m.value ?? ""); return (
+                                  <th key={m.value} className="px-2 py-2.5 text-[10px] font-bold text-gray-400 text-center min-w-[60px]" title={lbl}>{lbl.slice(0,5)}</th>
+                                );})}
                                 <th className="px-3 py-2.5 text-[10px] font-bold text-gray-400 text-center">الكل</th>
                               </tr>
                             </thead>
