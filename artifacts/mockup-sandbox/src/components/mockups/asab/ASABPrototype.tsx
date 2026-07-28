@@ -233,6 +233,8 @@ import {
   // T08 — shifts (company-surface handlers, shared)
   useShiftsLive,
   useShiftsHistory,
+  useShiftConfigs,
+  useSaveShiftConfig,
   useCloseShift,
   useExportShifts,
 } from "../../../api/queries";
@@ -6058,6 +6060,20 @@ type BrandShiftState= { id:string; name:string; color:string; numShifts:number; 
 type ShiftEditState = { idx:number; tmpStart:string; tmpDurH:number } | null;
 const sGenShifts = (num:number, dur:number, start:string): ShiftSlot[] =>
   Array.from({length:num},(_,i)=>{ const s=sAddMins(start,i*dur*60); return { name:SHIFT_NAMES_AR[i], start:s, end:sAddMins(s,dur*60), durH:dur }; });
+// Map a live ShiftConfig (GET /company/me/shifts/configs, scoped to the accountant's
+// brands) into the setup screen's brand-state. No per-restaurant endpoint exists, so
+// `rests` stays empty and the per-restaurant override section is hidden.
+const sMin = (t:string) => { const [h,m]=String(t??"").split(":").map(Number); return (h||0)*60+(m||0); };
+const sWinDurH = (s:string,e:string) => { let d=sMin(e)-sMin(s); if(d<=0)d+=1440; return Math.round(d/60*10)/10; };
+const sApiToBrand = (cfg:any): BrandShiftState => {
+  const numShifts = cfg?.numShifts ?? (Array.isArray(cfg?.shifts)?cfg.shifts.length:3);
+  const durH = cfg?.durationHours ?? 8;
+  const firstStart = String(cfg?.firstShiftStart ?? "08:00");
+  const shifts:ShiftSlot[] = Array.isArray(cfg?.shifts) && cfg.shifts.length
+    ? cfg.shifts.map((w:any,i:number)=>{ const st=String(w?.start ?? firstStart); const en=String(w?.end ?? ""); return { name:String(w?.name ?? SHIFT_NAMES_AR[i] ?? `شفت ${i+1}`), start:st, end:en, durH:sWinDurH(st,en)||durH }; })
+    : sGenShifts(numShifts,durH,firstStart);
+  return { id:String(cfg?.brandId ?? ""), name:String(cfg?.brandName ?? cfg?.brandId ?? ""), color:"#7c3aed", numShifts, durH, firstStart, shifts, rests:[], saved:true };
+};
 const sInitBrand = (b:typeof BRANDS_CATALOG[0]): BrandShiftState => {
   const p:{[k:string]:{numShifts:number;durH:number;firstStart:string}} = {
     reem:{numShifts:3,durH:8,firstStart:"08:00"}, herfy:{numShifts:2,durH:10,firstStart:"07:00"},
@@ -6164,6 +6180,8 @@ function ShiftSmartPanel({ cfg, onNum, onDur, onStart, onGen }:{
 function AccShifts({ navigate, setModal }:PageProps) {
   const { data: shiftsLive } = useShiftsLive();
   const { data: shiftsHistoryPage } = useShiftsHistory();
+  const { data: shiftConfigs } = useShiftConfigs();
+  const saveShiftCfgMut = useSaveShiftConfig();
   const closeShiftMut = useCloseShift();
   const exportShiftsMut = useExportShifts();
   const [tab, setTab] = useState<"live"|"setup"|"close"|"history">("live");
@@ -6172,8 +6190,15 @@ function AccShifts({ navigate, setModal }:PageProps) {
   const [closeSent, setCloseSent] = useState<string|null>(null);
 
   // ─── Shift Setup state ─────────────────────────────────────────────────────
-  const [brandCfgs,  setBrandCfgs]  = useState<BrandShiftState[]>(()=>BRANDS_CATALOG.map(sInitBrand));
-  const [selBrandId, setSelBrandId] = useState(BRANDS_CATALOG[0]?.id ?? "");
+  // Real, accountant-scoped brands from GET /company/me/shifts/configs — no static seed.
+  const [brandCfgs,  setBrandCfgs]  = useState<BrandShiftState[]>([]);
+  const [selBrandId, setSelBrandId] = useState("");
+  useEffect(() => {
+    const list = Array.isArray(shiftConfigs) ? shiftConfigs : [];
+    const mapped = list.map(sApiToBrand).filter(b=>b.id);
+    setBrandCfgs(mapped);
+    setSelBrandId(prev => (prev && mapped.some(b=>b.id===prev)) ? prev : (mapped[0]?.id ?? ""));
+  }, [shiftConfigs]);
   const [expandedRest,setExpandedRest] = useState<string|null>(null);
   const [brandEdit,  setBrandEdit]  = useState<ShiftEditState>(null);
   const [restEdits,  setRestEdits]  = useState<Record<string,ShiftEditState>>({});
@@ -6189,7 +6214,13 @@ function AccShifts({ navigate, setModal }:PageProps) {
 
   const doAutoGen     = (bId:string) => { const b=brandCfgs.find(x=>x.id===bId)!; updBrand(bId,{shifts:sGenShifts(b.numShifts,b.durH,b.firstStart)}); setBrandEdit(null); };
   const doRestAutoGen = (bId:string, rId:string) => { const r=brandCfgs.find(x=>x.id===bId)!.rests.find(x=>x.restId===rId)!; updRest(bId,rId,{shifts:sGenShifts(r.numShifts,r.durH,r.firstStart)}); setRestEdits(p=>({...p,[rId]:null})); };
-  const doSave        = (bId:string) => { setBrandCfgs(p=>p.map(b=>b.id===bId?{...b,saved:true}:b)); setSavedBrand(bId); setTimeout(()=>setSavedBrand(null),2200); };
+  const doSave        = (bId:string) => {
+    const b = brandCfgs.find(x=>x.id===bId); if(!b) return;
+    saveShiftCfgMut.mutate(
+      { brandId: bId, config: { numShifts: b.numShifts, durationHours: b.durH, firstShiftStart: b.firstStart } },
+      { onSuccess: () => { setBrandCfgs(p=>p.map(x=>x.id===bId?{...x,saved:true}:x)); setSavedBrand(bId); setTimeout(()=>setSavedBrand(null),2200); } },
+    );
+  };
 
   // Brand-level shift edit handlers
   const brandEditOpen   = (idx:number,s:string,d:number) => setBrandEdit({idx,tmpStart:s,tmpDurH:d});
@@ -6332,6 +6363,7 @@ function AccShifts({ navigate, setModal }:PageProps) {
           {/* Brand selector pills */}
           <div className="flex items-center gap-2 flex-wrap bg-white rounded-xl border border-gray-100 shadow-sm p-3">
             <span className="text-xs font-bold text-gray-500 ml-1">العلامة التجارية:</span>
+            {brandCfgs.length===0 && <span className="text-xs text-gray-400">لا توجد علامات تجارية مخصّصة لك بعد</span>}
             {brandCfgs.map(b=>(
               <button key={b.id} onClick={()=>{setSelBrandId(b.id);setExpandedRest(null);setBrandEdit(null);setRestEdits({});setRestSearch("");}}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${selBrandId===b.id?"text-white border-transparent shadow-sm":"bg-white text-gray-600 border-gray-200 hover:border-gray-300"}`}
@@ -6406,7 +6438,9 @@ function AccShifts({ navigate, setModal }:PageProps) {
                   </div>
                 )}
 
-                {/* Per-restaurant overrides */}
+                {/* Per-restaurant overrides — hidden: there is no per-restaurant
+                    shift-config endpoint; brand-level config is authoritative. */}
+                {selBrand.rests.length > 0 && (
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <div>
@@ -6494,6 +6528,7 @@ function AccShifts({ navigate, setModal }:PageProps) {
                     ))}
                   </div>
                 </div>
+                )}
               </div>
             </div>
           )}
@@ -10323,7 +10358,10 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
     const rests = (accModulesApi as any)?.restaurants;
     if (!modAccSel || !Array.isArray(rests)) return;
     const cells: Record<string,string[]> = {};
-    for (const r of rests) { if (r?.id) cells[r.id] = Array.isArray(r.modules) ? r.modules : []; }
+    for (const r of rests) {
+      const rid = r?.id ?? r?.restaurantId ?? r?.restaurant_id;
+      if (rid) cells[String(rid)] = Array.isArray(r?.modules) ? r.modules : (Array.isArray(r?.moduleKeys) ? r.moduleKeys : []);
+    }
     setAccModules(p => ({ ...p, [modAccSel]: cells }));
   }, [accModulesApi, modAccSel]);
   // Contract 1.9: PUT /admin/accountants/{accId}/restaurants/{restaurant}/modules
@@ -10629,9 +10667,13 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                       ? ((accModulesApi as any).moduleCatalog as any[]).map(m=>({ value: m.key ?? m.value, label: m.labelAr ?? m.labelEn ?? m.key ?? m.value })).filter(m=>m.value)
                       : null;
                     const COLS = apiCatalog ?? DIST_MODULES;
+                    // Never assume field names or that a name resolves — the API may key
+                    // restaurants by restaurantId/name and restName() returns undefined for
+                    // an unknown id. String()-guard everything so .split can't throw.
+                    const rowName = (nm:any, id:string) => String(nm ?? restName(id) ?? id ?? "").split("—")[0].trim();
                     const rows: {id:string;name:string}[] = apiRests
-                      ? apiRests.map(r=>({ id: r.id, name: r.name ?? restName(r.id).split("—")[0].trim() }))
-                      : (acc.restaurants ?? []).map((rest:string)=>({ id: rest, name: restName(rest).split("—")[0].trim() }));
+                      ? apiRests.map((r:any)=>{ const rid = String(r?.id ?? r?.restaurantId ?? r?.restaurant_id ?? ""); return { id: rid, name: rowName(r?.name ?? r?.restaurantName ?? r?.restaurant_name, rid) }; })
+                      : (acc.restaurants ?? []).map((rest:string)=>({ id: String(rest), name: rowName(undefined, String(rest)) }));
                     if((accModulesApi as any)?.reason === "NO_COVERED_RESTAURANTS") return (
                       <div className="flex flex-col items-center justify-center h-40 gap-2 text-gray-400">
                         <p className="text-sm">{t("لا يوجد براند مخصّص لهذا المحاسب","No brand assigned to this accountant")}</p>
