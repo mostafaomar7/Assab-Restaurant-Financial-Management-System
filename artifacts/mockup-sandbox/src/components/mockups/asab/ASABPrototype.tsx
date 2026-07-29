@@ -7359,8 +7359,39 @@ function AccAssets({ navigate }: PageProps) {
 
   const apiAssetsList = (apiAssetsPage as any)?.data ?? (apiAssetsPage as any);
   const [assets, setAssets] = useState<AssetEntry[]>([]);
-  // Sync live assets from the platform API; empty until the backend returns data (no static seed).
-  useEffect(() => { if (Array.isArray(apiAssetsList)) setAssets(apiAssetsList as AssetEntry[]); }, [apiAssetsList]);
+  // The live API returns PlatformAsset rows (category/branchName/usefulLifeMonths,
+  // no history/book/cat/case_), but this screen renders the richer AssetEntry
+  // shape. Normalize each row with safe defaults so a missing field (e.g. the
+  // absent `history` array) can never crash the page to a white screen.
+  useEffect(() => {
+    if (!Array.isArray(apiAssetsList)) return;
+    const CAT_MAP: Record<string,AssetCat> = {
+      معدات:"معدات", تقنية:"تقنية", أثاث:"أثاث", مركبات:"مركبات", أخرى:"أخرى",
+      equipment:"معدات", tech:"تقنية", technology:"تقنية", devices:"تقنية",
+      furniture:"أثاث", vehicle:"مركبات", vehicles:"مركبات", other:"أخرى",
+    };
+    const STATUSES: AssetStatus[] = ["pending_branch","pending_accountant","confirmed","registered"];
+    const num = (v:any) => (typeof v === "number" && isFinite(v) ? v : 0);
+    setAssets(apiAssetsList.map((a:any, i:number): AssetEntry => {
+      const cost = a?.costHalalas != null ? num(a.costHalalas)/100 : num(a?.cost);
+      const book = a?.bookValueHalalas != null ? num(a.bookValueHalalas)/100 : (a?.book != null ? num(a.book) : cost);
+      return {
+        id: a?.id ?? `FA-${i+1}`,
+        name: a?.name ?? "—",
+        cat: CAT_MAP[String(a?.cat ?? a?.category ?? "")] ?? "أخرى",
+        branch: a?.branch ?? a?.branchName ?? a?.branchId ?? "—",
+        cost, book,
+        usefulLife: num(a?.usefulLife ?? a?.usefulLifeMonths) || 60,
+        case_: a?.case_ === "branch_upload" ? "branch_upload" : "acc_register",
+        status: STATUSES.includes(a?.status) ? a.status : "pending_accountant",
+        invNum: a?.invNum ?? "—",
+        submittedBy: a?.submittedBy ?? "—",
+        date: a?.date ?? a?.createdAt ?? "—",
+        custodian: a?.custodian ?? "قيد التعيين",
+        history: Array.isArray(a?.history) ? a.history : [],
+      };
+    }));
+  }, [apiAssetsList]);
 
   const [expandedId,     setExpandedId]    = useState<string|null>(null);
   const [filterStatus,   setFilterStatus]  = useState<"الكل"|AssetStatus>("الكل");
