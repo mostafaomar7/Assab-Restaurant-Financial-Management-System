@@ -749,6 +749,14 @@ export interface CashierProvisioning {
     | "NO_BRANCH_MANAGER";
 }
 
+/** A shift window a mobile cashier works (from the app's "Shift Details"). */
+export interface BranchEmployeeShift {
+  id: string;
+  name: string;
+  startTime: string;
+  endTime: string;
+}
+
 export interface PlatformBranchEmployee {
   id: string;
   empNumber: string;
@@ -759,10 +767,22 @@ export interface PlatformBranchEmployee {
   shiftType?: string;
   hireDate?: string;
   status?: string;
-  /** Cashier login-account fields (required to provision a mobile account). */
   email?: string;
   phone?: string;
-  /** Present when the added employee triggered cashier provisioning. */
+  /**
+   * Where the record came from. Cashiers are now created only in the mobile app
+   * by the branch manager; the dashboard reads them but never creates them
+   * (source "dashboard" = added here, "mobile" = created in the app).
+   */
+  source?: "mobile" | "dashboard";
+  /** The mobile `cashiers.id` when this person exists in the app. */
+  cashierId?: string | null;
+  /** Shift windows the manager assigned in the app (mobile cashiers only). */
+  workingShifts?: BranchEmployeeShift[];
+  /** Who created the mobile record, and when (ISO). */
+  addedBy?: string;
+  addedAt?: string;
+  /** @deprecated cashier accounts are provisioned in the mobile app, not here. */
   cashier?: CashierProvisioning;
 }
 
