@@ -5,7 +5,7 @@ import {
 } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { api, type Page } from "../../client";
-import { getErrorMessage } from "../../errors";
+import { getErrorMessage, isApiError } from "../../errors";
 import type {
   PlatformBranchEmployee,
   PlatformBranchInventoryItems,
@@ -18,9 +18,10 @@ import type {
 import { queryKeys } from "../keys";
 
 // ─── Overview ───────────────────────────────────────────────────────────────
-export function useBranchOverviewPlatform() {
+export function useBranchOverviewPlatform(opts: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: queryKeys.platformBranchOverview,
+    enabled: opts.enabled,
     queryFn: async () => {
       const res = await api.get<PlatformBranchOverview>("/company/me/branch/overview");
       return res.data;
@@ -85,9 +86,9 @@ export function useBranchEmployeesPlatform() {
 export function useAddBranchEmployeePlatform() {
   const qc = useQueryClient();
   return useMutation({
-    // For a cashier role (cashier / كاشير / أمين صندوق) pass `email` (and ideally
-    // `phone`) so the backend provisions a real mobile login account. The
-    // response carries a `cashier` block describing that outcome.
+    // Cashiers are created only in the mobile app by the branch manager — the
+    // dashboard no longer provisions login accounts and `email` was dropped from
+    // the contract. `phone` is still accepted (and now stored).
     mutationFn: async (
       body: Partial<PlatformBranchEmployee> & {
         name: string;
@@ -102,20 +103,15 @@ export function useAddBranchEmployeePlatform() {
       );
       return res.data;
     },
-    onSuccess: (data) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["platform", "branch", "employees"] });
-      // Surface the cashier-provisioning result so the manager knows whether a
-      // login account was actually created.
-      const c = data?.cashier;
-      if (c && !c.provisioned && c.reason === "EMAIL_REQUIRED") {
-        toast.warning("تم إضافة الموظف بدون حساب دخول — البريد الإلكتروني مطلوب للكاشير");
-      } else if (c?.provisioned && c.emailSent) {
-        toast.success("تم إضافة الكاشير وإرسال بيانات الدخول لبريده");
-      } else {
-        toast.success("تم إضافة الموظف");
-      }
+      toast.success("تم إضافة الموظف");
     },
-    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+    // CASHIER_MOBILE_ONLY (422) is shown inline in the form, not as a toast.
+    onError: (e) => {
+      if (isApiError(e) && e.code === "CASHIER_MOBILE_ONLY") return;
+      toast.error(getErrorMessage(e, "ar"));
+    },
   });
 }
 

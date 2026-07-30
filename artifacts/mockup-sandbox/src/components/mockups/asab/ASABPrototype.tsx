@@ -709,6 +709,13 @@ const MODULE_TO_NAV: Record<ModuleKey, string> = {
   inventory:"acc-inventory", shifts:"acc-shifts", employees:"acc-employees", cash:"acc-cash",
 };
 
+// Two-letter avatar from a real name ("أحمد محمد" → "أم"); falls back to the first two chars.
+const nameInitials = (n:string) => {
+  const parts = String(n||"").trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0]||"") + (parts[1][0]||"");
+  return String(n||"").trim().slice(0,2);
+};
+
 // ─────────────────────────────────────────────
 // SHARED DISPLAY CONFIG
 // ─────────────────────────────────────────────
@@ -1593,9 +1600,23 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
   collapsed:boolean; setCollapsed:(v:boolean)=>void;
 }) {
   const { lang, setLang, dir } = useLang();
+  const { user } = useAuth();
   const tNav = (ar: string) => lang === "ar" ? ar : (EN_NAV_LABELS[ar] || ar);
   const tSection = (ar: string) => lang === "ar" ? ar : (EN_NAV_SECTIONS[ar] || ar);
-  const profile = lang === "ar" ? ROLE_PROFILES[role] : { ...ROLE_PROFILES[role], ...EN_ROLE_LABELS[role] };
+  const baseProfile = lang === "ar" ? ROLE_PROFILES[role] : { ...ROLE_PROFILES[role], ...EN_ROLE_LABELS[role] };
+  // Real branch name for the branch-manager role (gated so other roles never hit it).
+  const { data: branchOverview } = useBranchOverviewPlatform({ enabled: role === "branch" });
+  const realBranchName = (branchOverview as any)?.branch?.name as string | undefined;
+  // Show the real logged-in user's name + avatar (from useAuth); use the real branch
+  // name in the branch role's label. Falls back to the static demo profile otherwise.
+  const profile = {
+    ...baseProfile,
+    name: user?.name || baseProfile.name,
+    avatar: user?.avatar || (user?.name ? nameInitials(user.name) : baseProfile.avatar),
+    label: (role === "branch" && realBranchName)
+      ? `${lang === "ar" ? "مدير فرع" : "Branch Manager —"} ${realBranchName}`
+      : baseProfile.label,
+  };
   const navEntries = NAV_CONFIG[role];
   const { drafts } = useContext(AssetDraftContext);
   const activeDraftCount = drafts.filter(d=>d.status==="draft").length;
@@ -1628,6 +1649,9 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
     if (role==="accountant") {
       if (item.id==="acc-dashboard") return totalAccPending||undefined;
       if (item.id==="acc-assets")    return activeDraftCount||undefined;
+      // Shift management is a live board (live / setup / history) — it has no
+      // "pending review" inbox, so a per-module pending count there is misleading.
+      if (item.id==="acc-shifts")    return undefined;
       return pendingByModule[item.id]||undefined;
     }
     if (role==="head" && item.id==="head-pending") return headPendingCount||undefined;
@@ -6225,7 +6249,19 @@ function ShiftSmartPanel({ cfg, onNum, onDur, onStart, onGen }:{
         </div>
       </div>
       <div className="flex items-center justify-between">
-        <p className="text-[10px] text-gray-400">{cfg.numShifts} شفت × {cfg.durH}س = <span className="font-semibold text-gray-600">{cfg.numShifts*cfg.durH} ساعة/يوم</span> · يبدأ {sFmtT(cfg.firstStart)}</p>
+        {(() => {
+          const total = cfg.numShifts * cfg.durH;
+          const over = total > 24;
+          const maxPerShift = Math.floor(24 / Math.max(1, cfg.numShifts));
+          return (
+            <p className={`text-[10px] ${over?"text-red-500":"text-gray-400"}`}>
+              {cfg.numShifts} شفت × {cfg.durH}س = <span className={`font-semibold ${over?"text-red-600":"text-gray-600"}`}>{total} ساعة/يوم</span>
+              {over
+                ? <span className="font-bold"> · يتجاوز 24 ساعة — الحد الأقصى {maxPerShift} ساعة/شفت</span>
+                : <span> · متبقٍ {24-total} ساعة · يبدأ {sFmtT(cfg.firstStart)}</span>}
+            </p>
+          );
+        })()}
         <button onClick={onGen} className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-600 text-white text-xs font-bold rounded-lg hover:bg-purple-700 transition-all shadow-sm">
           <RefreshCw size={11}/> إعادة التوليد
         </button>
@@ -6273,6 +6309,13 @@ function AccShifts({ navigate, setModal }:PageProps) {
   const doRestAutoGen = (bId:string, rId:string) => { const r=brandCfgs.find(x=>x.id===bId)!.rests.find(x=>x.restId===rId)!; updRest(bId,rId,{shifts:sGenShifts(r.numShifts,r.durH,r.firstStart)}); setRestEdits(p=>({...p,[rId]:null})); };
   const doSave        = (bId:string) => {
     const b = brandCfgs.find(x=>x.id===bId); if(!b) return;
+    // A schedule can't exceed a 24-hour day; the backend rejects it with
+    // SHIFT_SCHEDULE_OVERFLOW. Validate client-side so the 4th window never
+    // silently wraps onto the 1st ("dashboard 4 shifts, app shows 3").
+    if (b.numShifts * b.durH > 24) {
+      toast.error(`عدد الورديات (${b.numShifts}) × مدة الوردية (${b.durH} ساعة) = ${b.numShifts*b.durH} ساعة، وهو أكبر من اليوم (24 ساعة).`);
+      return;
+    }
     saveShiftCfgMut.mutate(
       { brandId: bId, config: { numShifts: b.numShifts, durationHours: b.durH, firstShiftStart: b.firstStart } },
       { onSuccess: () => { setBrandCfgs(p=>p.map(x=>x.id===bId?{...x,saved:true}:x)); setSavedBrand(bId); setTimeout(()=>setSavedBrand(null),2200); } },
@@ -6331,7 +6374,7 @@ function AccShifts({ navigate, setModal }:PageProps) {
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-xl font-bold text-gray-800">إدارة الشفتات</h2>
-          <p className="text-gray-400 text-sm mt-0.5">الوقت الفعلي · إعداد الشفتات · إغلاق الشفت · السجل التاريخي</p>
+          <p className="text-gray-400 text-sm mt-0.5">الوقت الفعلي · إعداد الشفتات · السجل التاريخي</p>
         </div>
         <span className="flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-full border border-emerald-200">
           <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"/>مباشر — آخر تحديث: الآن
@@ -6351,7 +6394,6 @@ function AccShifts({ navigate, setModal }:PageProps) {
         {([
           {id:"live"    as const, label:"🟢 مباشر"},
           {id:"setup"   as const, label:"⚙️ إعداد الشفتات"},
-          {id:"close"   as const, label:"🔒 إغلاق الشفت"},
           {id:"history" as const, label:"📋 السجل التاريخي"},
         ] as {id:"live"|"setup"|"close"|"history";label:string}[]).map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)}
@@ -6442,13 +6484,14 @@ function AccShifts({ navigate, setModal }:PageProps) {
                   <div className="w-8 h-8 rounded-xl flex items-center justify-center text-white text-xs font-black" style={{background:selBrand.color}}>{selBrand.name[0]}</div>
                   <div>
                     <p className="font-bold text-gray-800 text-sm">{selBrand.name}</p>
-                    <p className="text-[10px] text-gray-400">{selBrand.numShifts} شفت · {selBrand.durH} ساعة/شفت · يبدأ {sFmtT(selBrand.firstStart)}</p>
+                    <p className={`text-[10px] ${selBrand.numShifts*selBrand.durH>24?"text-red-500 font-bold":"text-gray-400"}`}>{selBrand.numShifts} شفت · {selBrand.durH} ساعة/شفت · يبدأ {sFmtT(selBrand.firstStart)}{selBrand.numShifts*selBrand.durH>24?` · يتجاوز 24 ساعة!`:""}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   {savedBrand===selBrand.id && <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1"><CheckCircle2 size={12}/> تم الحفظ</span>}
                   <button onClick={()=>doSave(selBrand.id)}
-                    className="inline-flex items-center gap-1.5 px-4 py-1.5 text-white text-xs font-bold rounded-lg shadow-sm transition-all hover:opacity-90"
+                    disabled={selBrand.numShifts*selBrand.durH>24}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 text-white text-xs font-bold rounded-lg shadow-sm transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                     style={{background:selBrand.color}}>
                     <CheckCircle2 size={11}/> حفظ إعداد العلامة
                   </button>
@@ -11739,7 +11782,8 @@ function AdminRestaurants({}: PageProps) {
               </div>
             </div>
 
-            {/* ── Section 2: Per-restaurant employees ── */}
+            {/* ── Section 2: Per-restaurant employees — hidden per request (2026-07) ── */}
+            {false && (
             <div>
               <div className="flex items-center gap-3 mb-3">
                 <div className="w-1 h-5 rounded-full bg-blue-500"/>
@@ -11802,6 +11846,7 @@ function AdminRestaurants({}: PageProps) {
                 })}
               </div>
             </div>
+            )}
 
             {/* ── Section 3: Per-branch fixed assets ── */}
             <div>
@@ -14198,14 +14243,15 @@ function BranchEmployees({}: PageProps) {
   // Detect it once the overview loads and block the flow with a clear message instead.
   const noBranch = !!apiOverview && !((apiOverview as any)?.branch?.id);
   const [showAdd, setShowAdd] = useState(false);
-  const emptyForm = { name:"", empNumber:"", role:"كاشير", salary:"", shift:"صباحي", email:"", phone:"" };
+  // Cashiers are added from the mobile app by the branch manager — the dashboard
+  // only creates non-cashier roles, and no longer collects an email.
+  const emptyForm = { name:"", empNumber:"", role:"مشرف", salary:"", shift:"صباحي", phone:"" };
   const [form, setForm] = useState(emptyForm);
-  const cashier = isCashierRole(form.role);
-  // For a cashier, email is required to create the mobile login account.
-  const emailMissing = cashier && !form.email.trim();
-  const canSubmit = form.name.trim() && form.empNumber.trim() && !emailMissing && !addEmpMut.isPending;
+  const [addErr, setAddErr] = useState<string|null>(null);
+  const canSubmit = form.name.trim() && form.empNumber.trim() && !addEmpMut.isPending;
   const submit = () => {
     if (!canSubmit) return;
+    setAddErr(null);
     addEmpMut.mutate(
       {
         name: form.name.trim(),
@@ -14213,15 +14259,25 @@ function BranchEmployees({}: PageProps) {
         role: form.role,
         salaryHalalas: Math.round((parseFloat(form.salary) || 0) * 100),
         shift: form.shift,
-        email: form.email.trim() || undefined,
         phone: form.phone.trim() || undefined,
       },
-      { onSuccess: () => { setShowAdd(false); setForm(emptyForm); } },
+      {
+        onSuccess: () => { setShowAdd(false); setForm(emptyForm); },
+        onError: (e) => {
+          // A cashier role should be impossible from the dropdown, but a cached
+          // form / free-text role can still trip the 422 — show it inline.
+          if (isApiError(e) && e.code === "CASHIER_MOBILE_ONLY") {
+            setAddErr(e.messageAr || t("يُضاف الكاشير من تطبيق الموبايل بواسطة مدير الفرع.","Cashiers are added from the mobile app by the branch manager."));
+          } else {
+            setAddErr(isApiError(e) ? (e.messageAr || e.message) : t("تعذّر إضافة الموظف","Could not add the employee"));
+          }
+        },
+      },
     );
   };
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2><Btn variant="primary" size="sm" disabled={noBranch} onClick={()=>{ if(!noBranch) setShowAdd(true); }}><Plus size={13}/> {t("إضافة موظف","Add Employee")}</Btn></div>
+      <div className="flex items-center justify-between"><h2 className="text-xl font-bold text-gray-800">{t("الموظفون","Employees")}</h2></div>
       {noBranch && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
           <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5"/>
@@ -14243,17 +14299,22 @@ function BranchEmployees({}: PageProps) {
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الاسم","Name")} <span className="text-red-500">*</span></label><input value={form.name} onChange={e=>setForm(f=>({...f,name:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الرقم الوظيفي","Emp. No.")} <span className="text-red-500">*</span></label><input value={form.empNumber} onChange={e=>setForm(f=>({...f,empNumber:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الدور","Role")}</label>
-                  <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>كاشير</option><option>أمين صندوق</option><option>مشرف</option><option>عامل</option></select></div>
+                  <select value={form.role} onChange={e=>setForm(f=>({...f,role:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>مشرف</option><option>عامل</option><option>محاسب</option><option>مسؤول مخزن</option></select></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الشفت","Shift")}</label>
                   <select value={form.shift} onChange={e=>setForm(f=>({...f,shift:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"><option>صباحي</option><option>مسائي</option><option>كامل</option></select></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الراتب (ر.س)","Salary (SAR)")}</label><input type="number" value={form.salary} onChange={e=>setForm(f=>({...f,salary:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
                 <div><label className="text-xs font-semibold text-gray-600 block mb-1">{t("الهاتف","Phone")}</label><input dir="ltr" value={form.phone} onChange={e=>setForm(f=>({...f,phone:e.target.value}))} className="w-full text-sm border border-gray-200 rounded-xl px-3 py-2.5 outline-none focus:border-purple-400"/></div>
               </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">{t("البريد الإلكتروني","Email")} {cashier && <span className="text-red-500">*</span>}</label>
-                <input type="email" dir="ltr" value={form.email} onChange={e=>setForm(f=>({...f,email:e.target.value}))} className={`w-full text-sm border rounded-xl px-3 py-2.5 outline-none ${emailMissing?"border-red-300 focus:border-red-400":"border-gray-200 focus:border-purple-400"}`} placeholder="cashier@example.com"/>
-                <p className={`text-[11px] mt-1 ${emailMissing?"text-red-500":"text-gray-400"}`}>{cashier ? t("مطلوب للكاشير — يُنشأ حساب دخول للتطبيق وتُرسل كلمة المرور على البريد.","Required for cashiers — a mobile login account is created and the password is emailed.") : t("اختياري لغير الكاشير.","Optional for non-cashier roles.")}</p>
+              <div className="bg-blue-50 border border-blue-100 rounded-xl px-3 py-2 flex items-start gap-2">
+                <Bell size={13} className="text-blue-500 flex-shrink-0 mt-0.5"/>
+                <p className="text-[11px] text-blue-600">{t("يُضاف الكاشير من تطبيق الموبايل بواسطة مدير الفرع، ويظهر هنا للاطلاع فقط.","Cashiers are added from the mobile app by the branch manager and appear here for reference only.")}</p>
               </div>
+              {addErr && (
+                <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 flex items-start gap-2">
+                  <AlertTriangle size={13} className="text-red-500 flex-shrink-0 mt-0.5"/>
+                  <p className="text-[11px] text-red-600 font-medium">{addErr}</p>
+                </div>
+              )}
               <div className="flex gap-2 justify-end pt-1">
                 <Btn onClick={()=>setShowAdd(false)}>{t("إلغاء","Cancel")}</Btn>
                 <Btn variant="primary" disabled={!canSubmit} onClick={submit}><Plus size={13}/> {t("إضافة","Add")}</Btn>
@@ -14265,19 +14326,38 @@ function BranchEmployees({}: PageProps) {
       <Card title={(apiOverview as any)?.branch?.name ?? t("موظفو الفرع","Branch Employees")}>
         {emps.length===0 && !noBranch && <div className="px-5 py-8 text-center text-sm text-gray-400">{t("لا يوجد موظفون بعد","No employees yet")}</div>}
         {emps.length>0 && <table className="w-full" dir="rtl">
-          <thead className="bg-gray-50"><tr className="text-xs text-gray-500 font-semibold"><th className="px-4 py-3 text-right">{t("الموظف","Employee")}</th><th className="px-4 py-3 text-right">{t("الدور","Role")}</th><th className="px-4 py-3 text-center">{t("الراتب","Salary")}</th><th className="px-4 py-3 text-center">{t("الشفت","Shift")}</th><th className="px-4 py-3 text-center">{t("الحالة","Status")}</th></tr></thead>
+          <thead className="bg-gray-50"><tr className="text-xs text-gray-500 font-semibold"><th className="px-4 py-3 text-right">{t("الموظف","Employee")}</th><th className="px-4 py-3 text-right">{t("الدور","Role")}</th><th className="px-4 py-3 text-center">{t("الشفت","Shift")}</th><th className="px-4 py-3 text-center">{t("الحالة","Status")}</th></tr></thead>
           <tbody className="divide-y divide-gray-100">
             {emps.map((e,i)=>{
-              // API shape: { name, role, monthlySalary (halalas), shiftType, status }.
-              const salaryHalalas = e.monthlySalary ?? e.salaryHalalas ?? (typeof e.salary === "number" ? e.salary*100 : 0);
+              // API shape: { name, role, shiftType, status, source,
+              // workingShifts[], addedBy, addedAt } — cashiers come from the
+              // mobile app (source "mobile") and carry their own shift windows.
+              const isMobile = e.source === "mobile";
+              const workingShifts = Array.isArray(e.workingShifts) ? e.workingShifts : [];
               const shift = e.shiftType ?? e.shift ?? "—";
               const active = (e.status ?? (e.active ? "active" : "")) === "active";
               return (
-              <tr key={e.id ?? i} className="hover:bg-gray-50">
-                <td className="px-4 py-3"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-xs">{(e.name||"?")[0]}</div><span className="font-semibold text-sm text-gray-800">{e.name||"—"}</span></div></td>
+              <tr key={e.id ?? e.cashierId ?? i} className="hover:bg-gray-50 align-top">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-400 to-cyan-400 flex items-center justify-center text-white font-bold text-xs flex-shrink-0">{(e.name||"?")[0]}</div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="font-semibold text-sm text-gray-800">{e.name||"—"}</span>
+                        {isMobile && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-bold inline-flex items-center gap-0.5"><Smartphone size={9}/> {t("من التطبيق","From App")}</span>}
+                      </div>
+                      {(e.addedBy || e.addedAt) && <p className="text-[10px] text-gray-400 mt-0.5">{[e.addedBy, e.addedAt ? String(e.addedAt).slice(0,10) : null].filter(Boolean).join(" · ")}</p>}
+                    </div>
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-sm text-gray-600">{e.role||"—"}</td>
-                <td className="px-4 py-3 text-center font-mono text-sm font-semibold">{Math.round((salaryHalalas||0)/100).toLocaleString()} {t("ر.س","SAR")}</td>
-                <td className="px-4 py-3 text-center"><Badge className="bg-gray-50 text-gray-600">{shift}</Badge></td>
+                <td className="px-4 py-3 text-center">
+                  {workingShifts.length > 0
+                    ? <div className="flex flex-col items-center gap-1">{workingShifts.map((w:any,wi:number)=>(
+                        <span key={w.id ?? wi} className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-700 border border-purple-100 font-medium whitespace-nowrap">{w.name}{(w.startTime||w.endTime)?` · ${w.startTime ?? ""}–${w.endTime ?? ""}`:""}</span>
+                      ))}</div>
+                    : <Badge className="bg-gray-50 text-gray-600">{shift}</Badge>}
+                </td>
                 <td className="px-4 py-3 text-center"><Badge className={active?"bg-emerald-50 text-emerald-700":"bg-gray-50 text-gray-500"}>{active?t("نشط","Active"):t("إجازة","On Leave")}</Badge></td>
               </tr>
             );})}
