@@ -5873,8 +5873,11 @@ function AccInventoryItems({ navigate }:PageProps) {
     "فرع جدة - الرحاب":       {"خبز تنور":{prev:300,curr:190,pct:37},"بهارات مشوي":{prev:8,curr:5,pct:38}},
   };
   const brands = Object.keys(BRAND_CATALOG);
-  const [selBrand, setSelBrand] = useState(brands[0]);
-  const [selBranch, setSelBranch] = useState(BRAND_BRANCHES[brands[0]][0]);
+  // The catalog is API-driven and empty until the backend returns it, so `brands`
+  // can be []. Seed the selectors defensively — indexing BRAND_BRANCHES[undefined][0]
+  // would throw and white-screen the page.
+  const [selBrand, setSelBrand] = useState(brands[0] ?? "");
+  const [selBranch, setSelBranch] = useState(() => BRAND_BRANCHES[brands[0] ?? ""]?.[0] ?? "");
   const [catFilter, setCatFilter] = useState("الكل");
   const [saving, setSaving] = useState(false);
   const [savedBranch, setSavedBranch] = useState<string|null>(null);
@@ -5937,16 +5940,21 @@ function AccInventoryItems({ navigate }:PageProps) {
         </div>
       )}
 
+      {brands.length===0 ? (
+        <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10">
+          <EmptyState icon="📦" title="لا يوجد كتالوج أصناف بعد" desc="ارفع كتالوج الأصناف للعلامة أولاً، ثم حدّد أصناف الجرد اليومي لكل فرع."/>
+        </div>
+      ) : (<>
       {/* Brand + Branch selector */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-4">
         <div>
           <p className="text-[11px] font-semibold text-gray-500 mb-2 uppercase tracking-wide">العلامة التجارية</p>
           <div className="flex gap-2 flex-wrap">
             {brands.map(b=>(
-              <button key={b} onClick={()=>{ setSelBrand(b); setSelBranch(BRAND_BRANCHES[b][0]); setCatFilter("الكل"); setSavedBranch(null); }}
+              <button key={b} onClick={()=>{ setSelBrand(b); setSelBranch(BRAND_BRANCHES[b]?.[0] ?? ""); setCatFilter("الكل"); setSavedBranch(null); }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${selBrand===b?"border-purple-500 bg-purple-50 text-purple-700":"border-gray-200 bg-white text-gray-600 hover:border-purple-200"}`}>
                 {b}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${selBrand===b?"bg-purple-100 text-purple-600":"bg-gray-100 text-gray-400"}`}>{BRAND_BRANCHES[b].length} فروع</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${selBrand===b?"bg-purple-100 text-purple-600":"bg-gray-100 text-gray-400"}`}>{BRAND_BRANCHES[b]?.length ?? 0} فروع</span>
               </button>
             ))}
           </div>
@@ -5954,10 +5962,10 @@ function AccInventoryItems({ navigate }:PageProps) {
         <div>
           <p className="text-[11px] font-semibold text-gray-500 mb-2 uppercase tracking-wide">الفرع</p>
           <div className="flex flex-wrap gap-2">
-            {BRAND_BRANCHES[selBrand].map(br=>{
+            {(BRAND_BRANCHES[selBrand] ?? []).map(br=>{
               const brDaily = dailyLists[br]||[];
               const brDiffs = MONTHLY_DIFF[br]||{};
-              const brFlaggedCount = BRAND_CATALOG[selBrand].filter(i=>brDiffs[i.name]&&brDiffs[i.name].pct>=FLAG_PCT&&!brDaily.includes(i.name)).length;
+              const brFlaggedCount = (BRAND_CATALOG[selBrand] ?? []).filter(i=>brDiffs[i.name]&&brDiffs[i.name].pct>=FLAG_PCT&&!brDaily.includes(i.name)).length;
               return (
                 <button key={br} onClick={()=>{ setSelBranch(br); setCatFilter("الكل"); setSavedBranch(null); }}
                   className={`relative flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border-2 transition-all ${selBranch===br?"border-purple-500 bg-purple-50 text-purple-700":"border-gray-200 bg-white text-gray-600 hover:border-purple-200"}`}>
@@ -6092,6 +6100,7 @@ function AccInventoryItems({ navigate }:PageProps) {
           )}
         </div>
       </div>
+      </>)}
     </div>
   );
 }
