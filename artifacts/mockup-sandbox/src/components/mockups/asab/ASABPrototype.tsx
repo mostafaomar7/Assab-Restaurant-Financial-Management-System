@@ -3935,6 +3935,35 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
   const [convertModal,     setConvertModal]     = useState<{opId:string; invNum:string; vendor:string; desc:string; amount:number; branch:string; date:string}|null>(null);
   const convertedInvNums = getConvertedInvNums();
 
+  // Real per-invoice detail for the currently-expanded op (T05 §1) —
+  // GET /operations/{id}.expenses.invoices. The list endpoint carries no invoice
+  // rows, so the table below fed on the simulated INVOICES map. Fetch the open op
+  // and use its enriched invoices (real supplier/vendor, exact halalas, verify
+  // + conversion state) instead; fall back to the simulation when absent.
+  const { data: expandedDetail } = useOperation(expandedId);
+  const realExpandedInvoices = (expandedDetail as any)?.expenses?.invoices as
+    | Array<{ index:number; invNum:string; vendor:string; desc:string; date:string; preTaxHalalas:number; vat15Halalas:number; inclTaxHalalas:number; verified:boolean; convertedToAsset:boolean; attachmentCount:number }>
+    | undefined;
+  type ExpInvRow = { invNum:string; vendor:string; desc:string; amount:number; date:string; attachCount:number; _index?:number; _verified?:boolean; _preTax?:number; _vat?:number; _converted?:boolean };
+  const invoicesFor = (opId: string): ExpInvRow[] => {
+    if (opId === expandedId && realExpandedInvoices && realExpandedInvoices.length > 0) {
+      return realExpandedInvoices.map(r => ({
+        invNum: r.invNum,
+        vendor: r.vendor || "—",
+        desc: r.desc || "",
+        amount: (r.inclTaxHalalas ?? 0) / 100,
+        date: r.date || "",
+        attachCount: r.attachmentCount ?? 0,
+        _index: r.index,
+        _verified: r.verified,
+        _preTax: (r.preTaxHalalas ?? 0) / 100,
+        _vat: (r.vat15Halalas ?? 0) / 100,
+        _converted: r.convertedToAsset,
+      }));
+    }
+    return INVOICES[opId] || INVOICES["default"];
+  };
+
   const FALLBACK_EXP_DAY_OPTIONS = [
     { label:t("الكل","All"),            val:"all"      },
     { label:t("اليوم","Today"),         val:"today"    },
@@ -4077,7 +4106,7 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
         {filtered.length===0
           ? <EmptyState icon="✅" title={t("لا توجد بيانات","No Data")} desc={t("لا توجد بيانات تطابق الفلاتر المحددة","No data matches the selected filters")}/>
           : filtered.map(op=>{
-              const invoices = INVOICES[op.id] || INVOICES["default"];
+              const invoices = invoicesFor(op.id);
               const isExpanded = expandedId===op.id;
               const isLocked = op.status==="final-approved";
               const statusLabel = en ? (EN_STATUS_CFG[op.status]||STATUS_CFG[op.status].label) : STATUS_CFG[op.status].label;
@@ -4168,10 +4197,14 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
                         <tbody className="divide-y divide-gray-100 bg-white">
                           {invoices.map((inv,k)=>{
                             const vKey = `${op.id}-${inv.invNum}`;
-                            const isInvVerified = verifiedInvoices[vKey]||false;
-                            const amtBeforeVat = Math.round(inv.amount / 1.15);
-                            const vatAmt       = inv.amount - amtBeforeVat;
-                            const alreadyConverted = convertedInvNums.has(inv.invNum);
+                            // Prefer the real op-detail fields when the row came from the
+                            // live invoices; fall back to the simulated math otherwise.
+                            const rInv = inv as typeof inv & { _index?:number; _verified?:boolean; _preTax?:number; _vat?:number; _converted?:boolean };
+                            const invIndex = rInv._index ?? k;
+                            const isInvVerified = rInv._verified ?? (verifiedInvoices[vKey]||false);
+                            const amtBeforeVat = rInv._preTax ?? Math.round(inv.amount / 1.15);
+                            const vatAmt       = rInv._vat ?? (inv.amount - amtBeforeVat);
+                            const alreadyConverted = (rInv._converted ?? false) || convertedInvNums.has(inv.invNum);
                             return (
                               <tr key={k} className={`hover:bg-gray-50 ${isInvVerified?"bg-emerald-50/40":""} ${alreadyConverted?"bg-purple-50/20":""}`}>
                                 <td className="px-3 py-2 font-mono text-purple-700 font-semibold">{inv.invNum}</td>
@@ -4188,7 +4221,7 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
                                   </button>
                                 </td>
                                 <td className="px-3 py-2 text-center">
-                                  <button onClick={()=>{ toggleInvoiceVerify(vKey); (isInvVerified?unverifyMut:verifyMut).mutate({ invoiceId: op.id, invoiceIndex: k }); }}
+                                  <button onClick={()=>{ toggleInvoiceVerify(vKey); (isInvVerified?unverifyMut:verifyMut).mutate({ invoiceId: op.id, invoiceIndex: invIndex }); }}
                                     title={isInvVerified ? t("موثّق","Verified") : t("اضغط للتوثيق","Click to verify")}
                                     className={`w-7 h-7 rounded-full flex items-center justify-center mx-auto transition-all ${isInvVerified?"bg-emerald-500 text-white":"border-2 border-dashed border-gray-300 text-gray-300 hover:border-emerald-400 hover:text-emerald-400"}`}>
                                     <CheckSquare size={12}/>
@@ -4216,12 +4249,12 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
                         <tfoot className="bg-gray-50 border-t-2 border-gray-200">
                           <tr>
                             <td colSpan={4} className={`px-3 py-2.5 font-bold text-gray-900 ${dir==="ltr"?"text-left":"text-right"}`}>{t("الإجمالي","Total")}</td>
-                            <td className="px-3 py-2.5 text-center font-mono text-gray-600">{fmtAmt(Math.round(invoices.reduce((s,i)=>s+i.amount,0)/1.15))} {t("ر.س","SAR")}</td>
-                            <td className="px-3 py-2.5 text-center font-mono text-amber-600 bg-amber-50/20">{fmtAmt(invoices.reduce((s,i)=>s+Math.round(i.amount-i.amount/1.15),0))} {t("ر.س","SAR")}</td>
+                            <td className="px-3 py-2.5 text-center font-mono text-gray-600">{fmtAmt(Math.round(invoices.reduce((s,i)=>s+((i as any)._preTax ?? i.amount/1.15),0)))} {t("ر.س","SAR")}</td>
+                            <td className="px-3 py-2.5 text-center font-mono text-amber-600 bg-amber-50/20">{fmtAmt(Math.round(invoices.reduce((s,i)=>s+((i as any)._vat ?? (i.amount-i.amount/1.15)),0)))} {t("ر.س","SAR")}</td>
                             <td className="px-3 py-2.5 text-center font-black font-mono text-emerald-700 bg-emerald-50/20">{fmtAmt(invoices.reduce((s,i)=>s+i.amount,0))} {t("ر.س","SAR")}</td>
                             <td></td>
                             <td className="px-3 py-2.5 text-center text-[10px] text-gray-500">
-                              {invoices.filter(inv=>verifiedInvoices[`${op.id}-${inv.invNum}`]).length}/{invoices.length} {t("موثّق","verified")}
+                              {invoices.filter(inv=>((inv as any)._verified ?? verifiedInvoices[`${op.id}-${inv.invNum}`])).length}/{invoices.length} {t("موثّق","verified")}
                             </td>
                           </tr>
                         </tfoot>
