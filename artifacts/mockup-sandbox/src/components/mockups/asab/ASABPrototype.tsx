@@ -14516,7 +14516,9 @@ function ProcNewOrders({}: PageProps) {
     orderNumber: (r.orderNumber ?? r.id) as string,
     branch: (r.branchName ?? r.branchId ?? "—") as string,
     supplierId: (r.supplierId ?? "") as string,
-    supplier: (r.supplierId ? `${t("مورد","Supplier")} ${String(r.supplierId).slice(0,6)}` : t("غير محدد","Unassigned")) as string,
+    // Prefer the enriched supplier name (meeting 2026-07-29 §3); only fall back to
+    // an id fragment when the backend hasn't attached a name.
+    supplier: (r.supplierName ?? (r.supplierId ? `${t("مورد","Supplier")} ${String(r.supplierId).slice(0,6)}` : t("غير محدد","Unassigned"))) as string,
     items: (r.totalItems ?? 0) as number,
     total: (r.totalAmount ?? 0) as number,
     urgency: (r.priority==="high" ? "عاجل" : "عادي") as string,

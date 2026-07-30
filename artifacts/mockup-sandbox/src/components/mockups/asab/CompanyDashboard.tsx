@@ -2815,6 +2815,15 @@ function apiOpToCOp(op: ApiOperation): COp {
   };
 }
 
+// Distinct brand names present in the loaded ops — powers the brand filter
+// dropdowns on the sales/expenses tabs (meeting 2026-07-29 §2), so the options
+// reflect the real brands in scope rather than a static seed list.
+function cBrandNamesFromOps(ops: COp[]): string[] {
+  const seen = new Set<string>();
+  for (const o of ops) { const n = o.brandName; if (n && n !== "—") seen.add(n); }
+  return [...seen];
+}
+
 function useSharedOps() {
   const opsQuery   = useOperations({ pageSize: 100 });
   const approveMut = useApproveOperation();
@@ -3048,6 +3057,7 @@ function AccCompanySales({ ops, approve, reject, requestClarification, bulkAppro
 
   const mOps = ops.filter(o=>o.module==="sales");
   const pending = mOps.filter(o=>o.status==="pending");
+  const brandNames = cBrandNamesFromOps(ops);
 
   // Live day-completeness pills (T04 §3) + sales KPIs (T04 §2).
   const { data: dayRows = [] } = useSalesDayCompleteness(7);
@@ -3143,9 +3153,9 @@ function AccCompanySales({ ops, approve, reject, requestClarification, bulkAppro
             </select>
           </div>
           <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("العلامة التجارية","Brand")}</label>
-            <select value={brandFilter} onChange={e=>setBrandFilter(e.target.value)} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-2">
+            <select value={brandFilter} onChange={e=>setBrandFilter(e.target.value)} disabled={brandNames.length===0} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-2 disabled:bg-gray-50 disabled:text-gray-400">
               <option>{t("الكل","All")}</option>
-              {BRANDS.map(b=><option key={b.id}>{b.name}</option>)}
+              {brandNames.map(n=><option key={n}>{n}</option>)}
             </select>
           </div>
           <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("بحث","Search")}</label>
@@ -3431,6 +3441,7 @@ function AccCompanyExpenses({ ops, approve, reject, bulkApprove }:{ ops:COp[]; a
   const mOps = ops.filter(o=>o.module==="expenses");
   const pending = mOps.filter(o=>o.status==="pending");
   const pendingDrafts = drafts.filter(d=>d.status==="draft");
+  const brandNames = cBrandNamesFromOps(ops);
 
   const shown = mOps.filter(op=>{
     if(brandFilter!=="الكل" && op.brandName!==brandFilter) return false;
@@ -3469,7 +3480,7 @@ function AccCompanyExpenses({ ops, approve, reject, bulkApprove }:{ ops:COp[]; a
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 space-y-3">
         <div className="grid grid-cols-3 gap-3">
           <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("العلامة التجارية","Brand")}</label>
-            <select value={brandFilter} onChange={e=>setBrandFilter(e.target.value)} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-2"><option>{t("الكل","All")}</option>{BRANDS.map(b=><option key={b.id}>{b.name}</option>)}</select>
+            <select value={brandFilter} onChange={e=>setBrandFilter(e.target.value)} disabled={brandNames.length===0} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-2 disabled:bg-gray-50 disabled:text-gray-400"><option>{t("الكل","All")}</option>{brandNames.map(n=><option key={n}>{n}</option>)}</select>
           </div>
           <div><label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("الحالة","Status")}</label>
             <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value as any)} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-2"><option value="">{t("الكل","All")}</option>{(Object.entries(STATUS_CFG) as [COpStatus,any][]).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
