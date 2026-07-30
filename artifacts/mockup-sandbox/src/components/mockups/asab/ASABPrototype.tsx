@@ -2181,6 +2181,20 @@ function mapApiOpToOp(a: any): Op {
   };
 }
 
+// Distinct {id,name} brands present in the loaded ops — powers the brand filter
+// dropdowns on the sales/expenses tabs (meeting 2026-07-29 §2). The whole op set
+// is fetched in the caller's scope and filtered client-side, so the options are
+// simply the brands the accountant/head can actually see.
+function brandOptionsFromOps(ops: Op[]): { id: string; name: string }[] {
+  const seen = new Map<string, string>();
+  for (const o of ops) {
+    const id = o.brandId ?? "";
+    const name = o.brandName ?? "";
+    if (id && name && !seen.has(id)) seen.set(id, name);
+  }
+  return [...seen.entries()].map(([id, name]) => ({ id, name }));
+}
+
 function deriveExceptions(ops: Op[], forRole: "accountant"|"head", lang: Lang = "ar"): ExceptionItem[] {
   const en = lang === "en";
   const items: ExceptionItem[] = [];
@@ -3428,14 +3442,12 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
   const { data: kpis } = useSalesKpis(salesDate);
   const selectedDayInfo = dayRows.find(d=>d.date===selectedDay);
 
+  const brandOpts = brandOptionsFromOps(ops);
   const mOps    = ops.filter(o=>o.moduleKey==="sales");
   const pending  = mOps.filter(o=>o.status==="pending");
   const filtered = applyFilters(ops, filters, "sales")
-    .filter(o=>!salesDate || (o.operationDate ?? "").slice(0,10)===salesDate);
-
-  const FALLBACK_BRAND_OPTIONS = [t("الكل","All")];
-  const BRAND_OPTIONS = FALLBACK_BRAND_OPTIONS;
-  const allBrandVal = t("الكل","All");
+    .filter(o=>!salesDate || (o.operationDate ?? "").slice(0,10)===salesDate)
+    .filter(o=>!brand || o.brandId===brand);
 
   return (
     <div className="space-y-5" dir={dir}>
@@ -3500,8 +3512,9 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
           </div>
           <div>
             <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("العلامة التجارية","Brand")}</label>
-            <select value={brand} onChange={e=>setBrand(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {BRAND_OPTIONS.map(b=><option key={b}>{b}</option>)}
+            <select value={brand} onChange={e=>setBrand(e.target.value)} disabled={brandOpts.length===0} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 disabled:bg-gray-50 disabled:text-gray-400">
+              <option value="">{t("الكل","All")}</option>
+              {brandOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
           <div>
@@ -3521,7 +3534,7 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
             </div>
           </div>
           <div className="flex items-end">
-            {(filters.branch||filters.status||filters.search||selectedDay!=="all"||(brand&&brand!==allBrandVal)) && (
+            {(filters.branch||filters.status||filters.search||selectedDay!=="all"||brand) && (
               <button onClick={()=>{ setFilters({branch:"",status:"",match:"",search:""}); setBrand(""); setSelectedDay("all"); }}
                 className="text-xs text-purple-600 hover:underline flex items-center gap-1 pb-2"><RotateCcw size={11}/> {t("مسح الفلاتر","Clear Filters")}</button>
             )}
@@ -3935,8 +3948,9 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
   const apiExpDayOptions = (expensesApi as any)?.dayOptions;
   const EXP_DAY_OPTIONS = (apiExpDayOptions?.length > 0 ? apiExpDayOptions : FALLBACK_EXP_DAY_OPTIONS) as any[];
 
+  const brandOpts = brandOptionsFromOps(ops);
   const mOps    = ops.filter(o=>o.moduleKey==="expenses");
-  const filtered = applyFilters(ops, filters, "expenses");
+  const filtered = applyFilters(ops, filters, "expenses").filter(o=>!brand || o.brandId===brand);
   const pending  = mOps.filter(o=>o.status==="pending");
 
   const toggleInvoiceVerify = (key:string) => setVerifiedInvoices(p=>({...p,[key]:!p[key]}));
@@ -4003,8 +4017,9 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
           </div>
           <div>
             <label className="text-[11px] font-semibold text-gray-500 block mb-1">{t("العلامة التجارية","Brand")}</label>
-            <select value={brand} onChange={e=>setBrand(e.target.value)} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2">
-              {[t("الكل","All")].map(b=><option key={b}>{b}</option>)}
+            <select value={brand} onChange={e=>setBrand(e.target.value)} disabled={brandOpts.length===0} className="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 disabled:bg-gray-50 disabled:text-gray-400">
+              <option value="">{t("الكل","All")}</option>
+              {brandOpts.map(b=><option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
           <div>
@@ -4023,7 +4038,7 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
             </div>
           </div>
           <div className="flex items-end">
-            {(filters.branch||filters.status||filters.search||selectedDay!=="all"||(brand&&brand!==t("الكل","All"))) && (
+            {(filters.branch||filters.status||filters.search||selectedDay!=="all"||brand) && (
               <button onClick={()=>{ setFilters({branch:"",status:"",match:"",search:""}); setBrand(""); setSelectedDay("all"); }}
                 className="text-xs text-purple-600 hover:underline flex items-center gap-1 pb-2"><RotateCcw size={11}/> {t("مسح الفلاتر","Clear Filters")}</button>
             )}
