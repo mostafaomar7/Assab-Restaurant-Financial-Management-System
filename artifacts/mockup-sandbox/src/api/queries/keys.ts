@@ -234,6 +234,9 @@ export const queryKeys = {
   platformInventory: (filter?: PlatformInventoryFilter) =>
     ["platform", "accountant", "inventory", { filter }] as const,
   platformInventoryCatalog: ["platform", "accountant", "inventory", "catalog"] as const,
+  platformInventoryBrands: ["platform", "accountant", "inventory", "brands"] as const,
+  platformInventoryBrandBranches: (brandId: string) =>
+    ["platform", "accountant", "inventory", "brands", brandId, "branches"] as const,
   platformInventoryDailyList: (branchId: string) =>
     ["platform", "accountant", "inventory", "daily-list", branchId] as const,
   platformWaste: (filter?: PlatformWasteFilter) =>

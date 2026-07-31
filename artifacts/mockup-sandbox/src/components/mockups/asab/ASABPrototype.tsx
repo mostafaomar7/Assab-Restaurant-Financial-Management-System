@@ -24,6 +24,10 @@ import {
   usePlatformAssetDrafts,
   usePlatformInventory,
   usePlatformInventoryCatalog,
+  usePlatformInventoryDailyList,
+  useSavePlatformDailyInventoryList,
+  useAccountantInventoryBrands,
+  useAccountantInventoryBrandBranches,
   usePlatformWaste,
   usePlatformReminders,
   // Head
@@ -131,6 +135,7 @@ import {
   useExportCashLedger,
   useExportWaste,
   useCreatePlatformAsset,
+  useConfirmPlatformAsset,
   useCreateReminder,
   useCreateProcurementOrder,
   useUpdateOrder,
@@ -201,6 +206,8 @@ import {
   useOperation,
   useOperationAttachments,
   useRequestClarification,
+  useAuditTrail,
+  useCorrectOperation,
   useAssignSalesVariance,
   usePatchSalesDetails,
   useBranchEmployeesLookup,
@@ -714,6 +721,30 @@ const nameInitials = (n:string) => {
   const parts = String(n||"").trim().split(/\s+/).filter(Boolean);
   if (parts.length >= 2) return (parts[0][0]||"") + (parts[1][0]||"");
   return String(n||"").trim().slice(0,2);
+};
+
+// Gregorian month/day names — used to render the REAL system date (the prototype
+// used to pin "today" to 14 Oct 2025, which hid live data behind month filters).
+const AR_MONTHS_LONG = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+const EN_MONTHS_LONG = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const AR_WEEKDAYS = ["الأحد","الاثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"];
+const EN_WEEKDAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+/** "الاثنين، 14 أكتوبر 2025" / "Monday, October 14, 2025" from the real clock. */
+const formatTodayLong = (lang:"ar"|"en", d:Date = new Date()) =>
+  lang === "ar"
+    ? `${AR_WEEKDAYS[d.getDay()]}، ${d.getDate()} ${AR_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`
+    : `${EN_WEEKDAYS[d.getDay()]}, ${EN_MONTHS_LONG[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+/** "أكتوبر 2025" / "October 2025" for the current month. */
+const formatMonthLong = (lang:"ar"|"en", d:Date = new Date()) =>
+  lang === "ar" ? `${AR_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}` : `${EN_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+/** "14 أكتوبر 2025" / "October 14, 2025" — no weekday. Returns "" for a bad/empty date. */
+const formatDateLong = (lang:"ar"|"en", iso?:string|null) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return lang === "ar"
+    ? `${d.getDate()} ${AR_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`
+    : `${EN_MONTHS_LONG[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
 };
 
 // ─────────────────────────────────────────────
@@ -1785,7 +1816,7 @@ function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove
           </div>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-400 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg hidden sm:block">
-              {tL("الاثنين، 14 أكتوبر 2025","Monday, October 14, 2025")}
+              {formatTodayLong(lang)}
             </div>
             <select className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 bg-gray-50">
               <option>{tL("هذا الشهر","This Month")}</option>
@@ -1902,6 +1933,9 @@ function OpRow({ op, onView, onApprove, onReject }: {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-gray-800 text-sm">{op.branch}</span>
+          {op.brandName && op.brandName !== "—" && op.brandName !== op.branch && (
+            <><span className="text-gray-200">·</span><span className="text-xs text-gray-500">{op.brandName}</span></>
+          )}
           <span className="text-gray-200">·</span>
           <span className="text-xs text-gray-400 font-mono tracking-tight">{op.id}</span>
           <span className="text-gray-200">·</span>
@@ -3251,7 +3285,7 @@ function AccDashboard({ navigate, setModal, setDetailId, ops, approveOp, rejectO
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-gray-800 font-bold text-xl">{t("ملخص — الاثنين 14 أكتوبر 2025","Summary — Monday, October 14, 2025")}</h2>
+          <h2 className="text-gray-800 font-bold text-xl">{t("ملخص — ","Summary — ")}{formatTodayLong(lang)}</h2>
           <p className="text-gray-400 text-sm mt-0.5">{t("الفروع المخصصة: 1–50 | الموديولات: التسعة","Assigned branches: 1–50 | Modules: All nine")}</p>
         </div>
         <div className="flex items-center gap-3">
@@ -4145,7 +4179,7 @@ function AccExpensesPage({ navigate, setModal, setDetailId, ops, approveOp, reje
                         <Badge className="bg-indigo-50 text-indigo-600 border border-indigo-100 text-[10px]">{invoices.length} {t("فاتورة","invoices")}</Badge>
                         <Badge className={STATUS_CFG[op.status].cls}>{statusLabel}</Badge>
                       </div>
-                      <p className="text-xs text-gray-400 mt-0.5">{t("أُرسل","Sent")} {op.timeAgo}</p>
+                      <p className="text-xs text-gray-400 mt-0.5">{t("أُرسل","Sent")} {op.timeAgo}{op.submittedBy ? ` · ${t("قدّمها","by")} ${op.submittedBy}` : ""}</p>
                     </div>
                     <div className="flex gap-2">
                       <Btn size="sm" onClick={()=>setExpandedId(isExpanded?null:op.id)}>
@@ -4437,7 +4471,14 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
   const assignMut = useAssignSalesVariance();
   const patchMut = usePatchSalesDetails();
   const clarifyMut = useRequestClarification();
+  const correctMut = useCorrectOperation();
   const [clarifyOpen, setClarifyOpen] = useState(false);
+  // Real record-lifecycle log from GET /operations/{id}/audit-trail; fall back to
+  // the locally-derived timeline only until the server events arrive.
+  const { data: apiAudit } = useAuditTrail(op?.id);
+  const auditEvents: any[] = (Array.isArray(apiAudit) && apiAudit.length > 0)
+    ? apiAudit
+    : (op ? buildAuditTrail(op) : []);
 
   const totalSales = op?.amount || 0;
   const channels = recon?.channels ?? [];
@@ -4522,7 +4563,7 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
               <span className="text-2xl">💰</span>
               <div>
                 <h2 className="font-bold text-gray-900 text-xl">{t("تقرير المبيعات اليومي","Daily Sales Report")}</h2>
-                <p className="text-gray-500 text-sm mt-0.5">{op?.branch} · {t("14 أكتوبر 2025","October 14, 2025")} · {t("نهاية الشفت","Shift End")}</p>
+                <p className="text-gray-500 text-sm mt-0.5">{op?.branch}{op?.operationDate ? ` · ${formatDateLong(lang, op.operationDate)}` : ""} · {t("نهاية الشفت","Shift End")}</p>
               </div>
             </div>
             <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -4700,13 +4741,13 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
           </Card>
           <Card title={t("سجل دورة حياة السجل","Record Lifecycle Log")} actions={<span className="text-xs text-gray-400 font-mono">{op?.id}</span>}>
             <div className="p-4 space-y-0">
-              {op && buildAuditTrail(op).map((event, i, arr)=>(
+              {auditEvents.map((event, i, arr)=>(
                 <div key={i} className="flex gap-3 relative">
                   {/* Vertical connector line */}
                   {i < arr.length - 1 && (
                     <div className="absolute right-[13px] top-7 bottom-0 w-0.5 bg-gray-100 z-0"/>
                   )}
-                  <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 z-10 border ${event.isTerminal ? "border-2 border-emerald-300" : "border-gray-100"} ${event.cls}`}>
+                  <span className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm flex-shrink-0 z-10 border ${event.isTerminal ? "border-2 border-emerald-300" : "border-gray-100"} ${event.cls ?? "bg-gray-50 text-gray-500"}`}>
                     {event.icon}
                   </span>
                   <div className={`flex-1 pb-4 ${i === arr.length - 1 ? "" : ""}`}>
@@ -4758,13 +4799,17 @@ function AccSalesDetail({ navigate, setModal, setDetailId, detailId, ops, approv
                   ))}
                 </div>
                 <button
+                  disabled={correctMut.isPending}
                   onClick={()=>{
-                    if(op && addCorrectiveOp) {
-                      addCorrectiveOp(op.id);
+                    if(op) {
+                      // Real POST /operations/{id}/correction; keep the optimistic
+                      // linked op so the UI updates immediately either way.
+                      correctMut.mutate({ id: op.id });
+                      if (addCorrectiveOp) addCorrectiveOp(op.id);
                       navigate("acc-sales");
                     }
                   }}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-amber-50 text-amber-700 font-semibold text-sm hover:bg-amber-100 border border-amber-200">
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-amber-50 text-amber-700 font-semibold text-sm hover:bg-amber-100 border border-amber-200 disabled:opacity-50">
                   <FileText size={14}/> {t("إنشاء عملية تعديل مرتبطة","Create Linked Correction")}
                 </button>
               </div>
@@ -5873,13 +5918,10 @@ function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailI
 
 function AccInventoryItems({ navigate }:PageProps) {
   usePlatformInventory();
-  const { data: catalogApi } = usePlatformInventoryCatalog();
-  // Catalog comes from the platform API; empty until the backend returns it (no static seed).
-  const BRAND_CATALOG_FALLBACK: Record<string,{name:string;cat:string;unit:string}[]> = {};
-  const BRAND_CATALOG = (((catalogApi as any) && Object.keys(catalogApi as any).length>0)
-    ? (catalogApi as any)
-    : BRAND_CATALOG_FALLBACK) as typeof BRAND_CATALOG_FALLBACK;
-  const BRAND_BRANCHES: Record<string,string[]> = {
+  const { data: brandsApi } = useAccountantInventoryBrands();
+
+  // Static demo fallbacks — used ONLY when the accountant-scoped APIs return [].
+  const DEMO_BRAND_BRANCHES: Record<string,string[]> = {
     "برغر خليفة": ["فرع الرياض - العليا","فرع الرياض - النزهة","فرع جدة - الحمراء","فرع الدمام - الكورنيش"],
     "بيتزا باكو": ["فرع الرياض - الصحافة","فرع جدة - العزيزية","فرع مكة - العزيزية"],
     "وسطاوي": ["فرع الرياض - المغرزات","فرع مكة - المعابدة","فرع جدة - الرحاب"],
@@ -5896,29 +5938,67 @@ function AccInventoryItems({ navigate }:PageProps) {
     "فرع مكة - المعابدة":     {"لحم ضأن":{prev:22,curr:13,pct:41}},
     "فرع جدة - الرحاب":       {"خبز تنور":{prev:300,curr:190,pct:37},"بهارات مشوي":{prev:8,curr:5,pct:38}},
   };
-  const brands = Object.keys(BRAND_CATALOG);
-  // The catalog is API-driven and empty until the backend returns it, so `brands`
-  // can be []. Seed the selectors defensively — indexing BRAND_BRANCHES[undefined][0]
-  // would throw and white-screen the page.
-  const [selBrand, setSelBrand] = useState(brands[0] ?? "");
-  const [selBranch, setSelBranch] = useState(() => BRAND_BRANCHES[brands[0] ?? ""]?.[0] ?? "");
-  const [catFilter, setCatFilter] = useState("الكل");
-  const [saving, setSaving] = useState(false);
-  const [savedBranch, setSavedBranch] = useState<string|null>(null);
   const FLAG_PCT = 25;
 
-  const initDailyLists = (): Record<string,string[]> => {
-    const r: Record<string,string[]> = {};
-    Object.values(BRAND_BRANCHES).flat().forEach(br=>{ r[br]=[]; });
-    r["فرع الرياض - العليا"] = ["دجاج طازج","بطاطس","زيت قلي","كاتشب","مشروبات غازية"];
-    r["فرع الرياض - النزهة"] = ["خبز برجر","جبنة شيدر","طماطم"];
-    r["فرع الرياض - الصحافة"] = ["عجينة البيتزا","جبنة موزاريلا","مشروبات غازية"];
-    r["فرع الرياض - المغرزات"] = ["أرز بسمتي","دجاج طازج","خبز تنور"];
-    return r;
-  };
-  const [dailyLists, setDailyLists] = useState<Record<string,string[]>>(initDailyLists);
+  // ── Brands (API-first): [{id,name,branchCount,itemCount}] ────────────────
+  // Demo fallback applies ONLY before the API has responded (undefined). Once it
+  // responds with [] (empty scope), we honor it and let the empty-state render.
+  const brandsResponded = Array.isArray(brandsApi);
+  const apiBrands = (brandsResponded ? brandsApi : []) as any[];
+  const isApiBrands = apiBrands.length > 0;
+  const brandRows = brandsResponded
+    ? apiBrands.map(b=>({ id:String(b?.id ?? b?.name ?? ""), name:String(b?.name ?? b?.id ?? ""), branchCount:Number(b?.branchCount ?? 0) }))
+    : Object.keys(DEMO_BRAND_BRANCHES).map(n=>({ id:n, name:n, branchCount:DEMO_BRAND_BRANCHES[n].length }));
+  const brands = brandRows.map(b=>b.name);
+  const brandIdByName: Record<string,string> = Object.fromEntries(brandRows.map(b=>[b.name,b.id]));
+  const brandCountByName: Record<string,number> = Object.fromEntries(brandRows.map(b=>[b.name,b.branchCount]));
 
-  const catalog = BRAND_CATALOG[selBrand]||[];
+  const [selBrand, setSelBrand] = useState(brands[0] ?? "");   // brand NAME
+  useEffect(()=>{ if(brands.length && !brands.includes(selBrand)) setSelBrand(brands[0]); }, [brands.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selBrandId = brandIdByName[selBrand] ?? selBrand;
+
+  // ── Branches for selBrand (API-first): [{id,name,listItemCount}] ─────────
+  const { data: branchesApi } = useAccountantInventoryBrandBranches(isApiBrands ? selBrandId : undefined);
+  const apiBranches = (Array.isArray(branchesApi) ? branchesApi : []) as any[];
+  const branchRows = apiBranches.length > 0
+    ? apiBranches.map(b=>({ id:String(b?.id ?? ""), name:String(b?.name ?? b?.id ?? ""), real:true, count:Number(b?.listItemCount ?? 0) }))
+    : (DEMO_BRAND_BRANCHES[selBrand] ?? []).map(n=>({ id:n, name:n, real:false, count:0 }));
+  const branchNames = branchRows.map(b=>b.name);
+  const branchIdByName: Record<string,string> = Object.fromEntries(branchRows.map(b=>[b.name,b.id]));
+  const branchRealByName: Record<string,boolean> = Object.fromEntries(branchRows.map(b=>[b.name,b.real]));
+  const branchCountByName: Record<string,number> = Object.fromEntries(branchRows.map(b=>[b.name,b.count]));
+
+  const [selBranch, setSelBranch] = useState(branchNames[0] ?? "");   // branch NAME
+  useEffect(()=>{ if(branchNames.length && !branchNames.includes(selBranch)) setSelBranch(branchNames[0]); }, [branchNames.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  const selBranchId = branchIdByName[selBranch] ?? selBranch;
+  const selBranchReal = !!branchRealByName[selBranch];
+
+  // ── Catalog for selBrand (API-first): { items:[{id,name,cat,unit}] } ─────
+  const { data: catalogApi } = usePlatformInventoryCatalog(isApiBrands ? selBrandId : undefined);
+  const apiCatItems = (catalogApi && Array.isArray((catalogApi as any).items)) ? ((catalogApi as any).items as any[]) : [];
+  const catalog = (apiCatItems.length > 0
+    ? apiCatItems.map(it=>({ id:String(it?.id ?? it?.name ?? ""), name:String(it?.name ?? ""), cat:String(it?.cat ?? it?.category ?? "—"), unit:String(it?.unit ?? "") }))
+    : []) as {id:string;name:string;cat:string;unit:string}[];
+  const itemIdByName: Record<string,string> = Object.fromEntries(catalog.map(it=>[it.name,it.id]));
+
+  const [catFilter, setCatFilter] = useState("الكل");
+  const [savedBranch, setSavedBranch] = useState<string|null>(null);
+  const [savedCount, setSavedCount] = useState<number|null>(null);
+
+  // ── Current daily list for selBranch (API-first) → seed selection once ───
+  const { data: dailyApi } = usePlatformInventoryDailyList(selBranchReal ? selBranchId : undefined);
+  const [dailyLists, setDailyLists] = useState<Record<string,string[]>>({}); // keyed by branch NAME, holds item NAMES
+  useEffect(()=>{
+    const rows = (dailyApi as any)?.data ?? (Array.isArray(dailyApi) ? dailyApi : null);
+    if (Array.isArray(rows) && selBranchReal) {
+      // Seed once per branch so local edits are not clobbered on refetch.
+      setDailyLists(p => p[selBranch] !== undefined ? p : ({ ...p, [selBranch]: rows.map((r:any)=>String(r?.name ?? r?.catalogItemId ?? r?.id ?? "")) }));
+    }
+  }, [dailyApi, selBranch, selBranchReal]);
+
+  const savePut = useSavePlatformDailyInventoryList();
+  const saving = savePut.isPending;
+
   const cats = ["الكل",...new Set(catalog.map(i=>i.cat))];
   const shown = catFilter==="الكل" ? catalog : catalog.filter(i=>i.cat===catFilter);
   const dailyList = dailyLists[selBranch]||[];
@@ -5935,8 +6015,16 @@ function AccInventoryItems({ navigate }:PageProps) {
     setDailyLists(p=>({ ...p, [selBranch]: [...new Set([...(p[selBranch]||[]),...flaggedNotInDaily.map(i=>i.name)])] }));
   };
   const save = () => {
-    setSaving(true);
-    setTimeout(()=>{ setSaving(false); setSavedBranch(selBranch); }, 800);
+    if (selBranchReal) {
+      // Real persist: resolve selected item NAMES → catalogItemIds, then PUT.
+      const ids = (dailyLists[selBranch]||[]).map(n=>itemIdByName[n]).filter(Boolean);
+      savePut.mutate({ branchId: selBranchId, items: ids }, {
+        onSuccess: (res:any)=>{ setSavedBranch(selBranch); setSavedCount(typeof res?.savedCount==="number" ? res.savedCount : ids.length); },
+      });
+    } else {
+      // Demo branch (no real id): local-only confirmation.
+      setSavedBranch(selBranch); setSavedCount(dailyList.length);
+    }
   };
 
   return (
@@ -5958,7 +6046,7 @@ function AccInventoryItems({ navigate }:PageProps) {
           <CheckCircle2 size={16} className="text-emerald-600 flex-shrink-0"/>
           <div>
             <p className="text-emerald-800 font-semibold text-sm">تم الحفظ والإرسال بنجاح!</p>
-            <p className="text-emerald-600 text-xs">تم إرسال {dailyList.length} صنف إلى تطبيق مدير {savedBranch} مع إشعار فوري.</p>
+            <p className="text-emerald-600 text-xs">تم إرسال {savedCount ?? dailyList.length} صنف إلى تطبيق مدير {savedBranch} مع إشعار فوري.</p>
           </div>
           <button onClick={()=>setSavedBranch(null)} className="mr-auto text-emerald-400 hover:text-emerald-600"><X size={14}/></button>
         </div>
@@ -5975,10 +6063,10 @@ function AccInventoryItems({ navigate }:PageProps) {
           <p className="text-[11px] font-semibold text-gray-500 mb-2 uppercase tracking-wide">العلامة التجارية</p>
           <div className="flex gap-2 flex-wrap">
             {brands.map(b=>(
-              <button key={b} onClick={()=>{ setSelBrand(b); setSelBranch(BRAND_BRANCHES[b]?.[0] ?? ""); setCatFilter("الكل"); setSavedBranch(null); }}
+              <button key={b} onClick={()=>{ setSelBrand(b); setCatFilter("الكل"); setSavedBranch(null); }}
                 className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border-2 transition-all ${selBrand===b?"border-purple-500 bg-purple-50 text-purple-700":"border-gray-200 bg-white text-gray-600 hover:border-purple-200"}`}>
                 {b}
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${selBrand===b?"bg-purple-100 text-purple-600":"bg-gray-100 text-gray-400"}`}>{BRAND_BRANCHES[b]?.length ?? 0} فروع</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${selBrand===b?"bg-purple-100 text-purple-600":"bg-gray-100 text-gray-400"}`}>{brandCountByName[b] ?? 0} فروع</span>
               </button>
             ))}
           </div>
@@ -5986,15 +6074,15 @@ function AccInventoryItems({ navigate }:PageProps) {
         <div>
           <p className="text-[11px] font-semibold text-gray-500 mb-2 uppercase tracking-wide">الفرع</p>
           <div className="flex flex-wrap gap-2">
-            {(BRAND_BRANCHES[selBrand] ?? []).map(br=>{
+            {branchNames.map(br=>{
               const brDaily = dailyLists[br]||[];
               const brDiffs = MONTHLY_DIFF[br]||{};
-              const brFlaggedCount = (BRAND_CATALOG[selBrand] ?? []).filter(i=>brDiffs[i.name]&&brDiffs[i.name].pct>=FLAG_PCT&&!brDaily.includes(i.name)).length;
+              const brFlaggedCount = catalog.filter(i=>brDiffs[i.name]&&brDiffs[i.name].pct>=FLAG_PCT&&!brDaily.includes(i.name)).length;
               return (
                 <button key={br} onClick={()=>{ setSelBranch(br); setCatFilter("الكل"); setSavedBranch(null); }}
                   className={`relative flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border-2 transition-all ${selBranch===br?"border-purple-500 bg-purple-50 text-purple-700":"border-gray-200 bg-white text-gray-600 hover:border-purple-200"}`}>
                   <span>{br.replace("فرع ","ف. ")}</span>
-                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${selBranch===br?"bg-purple-100 text-purple-700":"bg-gray-100 text-gray-500"}`}>{brDaily.length} صنف</span>
+                  <span className={`px-1.5 py-0.5 rounded-full text-[9px] font-bold ${selBranch===br?"bg-purple-100 text-purple-700":"bg-gray-100 text-gray-500"}`}>{(brDaily.length || branchCountByName[br] || 0)} صنف</span>
                   {brFlaggedCount>0 && (
                     <span className="absolute -top-1.5 -left-1.5 w-4 h-4 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center">{brFlaggedCount}</span>
                   )}
@@ -7443,6 +7531,7 @@ function AccAssets({ navigate }: PageProps) {
   const exportAssetsMut = useExportAssets();
   const uploadTemplateMut = useAdminUploadTemplate();
   const createAssetMut = useCreatePlatformAsset();
+  const confirmAssetMut = useConfirmPlatformAsset();
   const { drafts, discardDraft, confirmDraft } = useContext(AssetDraftContext);
   type AssetStatus = "pending_branch"|"pending_accountant"|"confirmed"|"registered";
   type AssetCat    = "معدات"|"تقنية"|"أثاث"|"مركبات"|"أخرى";
@@ -7511,7 +7600,12 @@ function AccAssets({ navigate }: PageProps) {
 
   const [reviewingDraft, setReviewingDraft] = useState<string|null>(null);
 
-  const confirmAsset   = (id:string) => setAssets(p=>p.map(a=>a.id===id?{...a,status:"confirmed" as AssetStatus}:a));
+  const confirmAsset   = (id:string) => {
+    // Optimistic flip + real POST /accountant/assets/{id}/confirm; the server
+    // truth wins on the invalidation-triggered refetch.
+    setAssets(p=>p.map(a=>a.id===id?{...a,status:"confirmed" as AssetStatus}:a));
+    confirmAssetMut.mutate(id);
+  };
 
   const confirmDraftToAssets = (draftId:string) => {
     const draft = drafts.find(d=>d.draftId===draftId);
@@ -7548,6 +7642,24 @@ function AccAssets({ navigate }: PageProps) {
       submittedBy:"المحاسب", date:"اليوم", custodian:newAsset.custodian||"قيد التعيين",
       history:[{date:"اليوم", from:"—", to:newAsset.custodian||"—", note:"تسجيل من المحاسب — أُرسل إشعار للفرع", by:"المحاسب"}]
     }]);
+    // The branch picker is name-valued but POST /accountant/assets needs branchId —
+    // resolve it from the loaded rows and only fire the real create when we can
+    // (otherwise keep the optimistic local row without a broken request).
+    const branchId = Array.isArray(apiAssetsList)
+      ? apiAssetsList.find((a:any)=>(a?.branchName ?? a?.branch)===newAsset.branch)?.branchId
+      : undefined;
+    if (branchId) {
+      createAssetMut.mutate({
+        name: newAsset.name,
+        category: newAsset.cat,
+        branchId,
+        cost: Math.round((parseFloat(newAsset.cost)||0)*100),   // SAR → halalas
+        usefulLifeMonths: parseInt(newAsset.usefulLife)||60,
+        custodian: newAsset.custodian || undefined,
+        invNum: newAsset.invNum || undefined,
+        notes: newAsset.notes || undefined,
+      });
+    }
     setAddSent(true);
     setTimeout(()=>{ setShowAddModal(false); setAddSent(false); setNewAsset({name:"",cat:"معدات",branch:"",invNum:"",cost:"",usefulLife:"60",custodian:"",notes:""}); },1200);
   };
@@ -8283,7 +8395,35 @@ function AccWaste({}: PageProps) {
   // Waste entries come from the platform API; empty until the backend returns them (no static seed).
   const apiWasteList = (apiWaste as any)?.data ?? (apiWaste as any);
   const [entries, setEntries] = useState<WasteEntry[]>([]);
-  useEffect(() => { if (Array.isArray(apiWasteList)) setEntries(apiWasteList as WasteEntry[]); }, [apiWasteList]);
+  useEffect(() => {
+    if (!Array.isArray(apiWasteList)) return;
+    // Normalize each product to the internal shape. The canonical payload carries
+    // `value` (loss value in halalas) + `classification`/`responsibility` and NO
+    // `unitPrice`/`class_`/`resp`, so derive a per-unit price such that
+    // qty×unitPrice === value/100 (SAR) — this keeps every existing qty×unitPrice
+    // total/display correct without touching the dozen call-sites.
+    const mapped: WasteEntry[] = apiWasteList.map((e: any) => ({
+      ...e,
+      products: (e?.products ?? []).map((p: any) => {
+        const valueSar = p?.value != null ? p.value / 100 : undefined;
+        const qty = typeof p?.qty === "number" ? p.qty : Number(p?.qty) || 0;
+        const unitPrice = typeof p?.unitPrice === "number"
+          ? p.unitPrice
+          : (valueSar != null ? (qty ? valueSar / qty : valueSar) : 0);
+        return {
+          name: p?.name ?? "—",
+          qty,
+          unit: p?.unit ?? "",
+          unitPrice,
+          class_: (p?.class_ ?? p?.classification ?? "هدر") as WasteClass,
+          resp: (p?.resp ?? p?.responsibility ?? "مطعم") as Resp,
+          hasImg: p?.hasImg ?? false,
+          empAllocs: Array.isArray(p?.empAllocs) ? p.empAllocs : [],
+        };
+      }),
+    }));
+    setEntries(mapped);
+  }, [apiWasteList]);
 
   const updProd = (eid:string, pi:number, fn:(p:WasteProduct)=>WasteProduct) =>
     setEntries(prev=>prev.map(e=>e.id===eid?{...e,products:e.products.map((p,i)=>i===pi?fn(p):p)}:e));
@@ -8939,7 +9079,7 @@ function ReportsPage({}: PageProps) {
           <button key={i} className="bg-white rounded-xl border border-gray-100 p-5 text-right hover:border-purple-200 hover:bg-purple-50/30 transition-all shadow-sm">
             <div className="text-3xl mb-3">📊</div>
             <p className="font-semibold text-gray-800 text-sm">{r}</p>
-            <p className="text-xs text-gray-400 mt-1">أكتوبر 2025</p>
+            <p className="text-xs text-gray-400 mt-1">{formatMonthLong(lang)}</p>
             <div className="flex items-center gap-2 mt-3">
               <Btn size="sm"><Eye size={11}/> {t("عرض","View")}</Btn>
               <Btn size="sm"><Download size={11}/> {t("تحميل","Download")}</Btn>
@@ -10085,7 +10225,7 @@ function HeadERP({ ops, markErpPosted }:PageProps) {
                         <span className="text-xs text-gray-700">{p.l}</span>
                       </label>
                     ))}
-                    <input type="text" defaultValue="14 Oct 2025" className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 mt-1"/>
+                    <input type="text" defaultValue={new Date().toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})} className="w-full text-xs border border-gray-200 rounded-lg px-2 py-1.5 mt-1"/>
                   </div>
                 </div>
 
@@ -13128,13 +13268,14 @@ function AdminReports({}: PageProps) {
   const [sendFormat, setSendFormat] = useState<"pdf"|"excel"|"both">("pdf");
   const [sendMethod, setSendMethod] = useState<"email"|"inApp"|"both">("both");
 
-  // Reporting period: prefer the API's newest YYYY-MM; fall back to the demo month.
-  const periodParam = (periodList as string[])[0] ?? "2025-10";
+  // Reporting period: prefer the API's newest YYYY-MM; fall back to the CURRENT
+  // month (real clock) — never a pinned demo month, since this feeds the queries.
+  const periodParam = (periodList as string[])[0] ?? new Date().toISOString().slice(0,7);
   const [py, pm] = periodParam.split("-").map(Number);
   const periodFrom = `${periodParam}-01`;
   const periodTo = py && pm ? `${periodParam}-${String(new Date(py, pm, 0).getDate()).padStart(2,"0")}` : `${periodParam}-28`;
   const AR_MONTHS = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
-  const PERIOD = py && pm ? `${AR_MONTHS[pm-1]} ${py}` : "أكتوبر 2025";
+  const PERIOD = py && pm ? `${AR_MONTHS[pm-1]} ${py}` : formatMonthLong("ar");
   // T15 §6 — generic flattened preview of the uploaded file (label/value/type/header).
   // The structured P&L preview (T15.2) is deferred, so we render whatever cells the
   // dry-run exposes and fall back to the demo layout only when no upload exists.
@@ -16058,6 +16199,21 @@ function SupReports({}: PageProps) {
 // ════════════════════════════════════════════════════════════
 // MAIN EXPORT
 // ════════════════════════════════════════════════════════════
+// Map the authenticated MeResponse.role (RoleKey) onto this prototype's RoleId.
+// `company-admin` has its own dashboard (routed in App.tsx), so it returns null
+// here and never overrides the ASAB role.
+function roleKeyToRoleId(rk?: string | null): RoleId | null {
+  switch (rk) {
+    case "admin": return "admin";
+    case "head": return "head";
+    case "accountant": return "accountant";
+    case "branch": return "branch";
+    case "procurement": return "procurement";
+    case "supplier": return "supplier";
+    default: return null;
+  }
+}
+
 export function ASABPrototype() {
   // Seed from the site-wide language chosen on the entry screen, and keep them in sync.
   const [lang, setLangState] = useState<Lang>(() => getSiteLang());
@@ -16102,7 +16258,21 @@ export function ASABPrototype() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiOps, headPendingOps, headFinalOps, headRejectedOps, isHead]);
 
-  const { logout: authLogout } = useAuth();
+  const { user, logout: authLogout } = useAuth();
+  // The authenticated user's REAL role is authoritative: adopt it once it loads
+  // so a logged-in accountant always lands on the accountant dashboard, never a
+  // stale pre-login entry pick (which can be any role). Applied once per user id
+  // (ref-guarded) so in-app navigation afterwards is preserved.
+  const adoptedRoleForUser = useRef<string | null>(null);
+  useEffect(() => {
+    const rid = roleKeyToRoleId(user?.role);
+    if (!rid || !user) return;
+    if (adoptedRoleForUser.current === user.id) return;
+    adoptedRoleForUser.current = user.id;
+    setAppState(prev =>
+      prev.role === rid ? prev : { role: rid, page: ROLE_PROFILES[rid].defaultPage, detailId: null, modal: null },
+    );
+  }, [user]);
   // Tag the current history entry with a page so Back/Forward can restore it.
   const tagShiftHistory = (p:string, replace=false) => {
     try {

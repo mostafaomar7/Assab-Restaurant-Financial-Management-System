@@ -109,6 +109,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const handler = () => {
       setUser(null);
       setDefaultPage(null);
+      // Always purge stored tokens on forced sign-out — the no-refresh-token 401
+      // path dispatches this event without performRefresh() having cleared them,
+      // which would otherwise strand a stale access token in localStorage.
+      clearTokens();
       // Drop the pre-login dashboard/role pick so the next login re-routes cleanly
       // (a stale selection would strand the next user in the wrong dashboard).
       clearEntrySelection();
@@ -336,6 +340,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } finally {
       setUser(null);
       setDefaultPage(null);
+      clearTokens();
       // Always drop the pre-login pick — otherwise App's redirect effect would
       // immediately re-route the (now logged-out) browser back into a dashboard.
       clearEntrySelection();

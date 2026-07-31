@@ -221,12 +221,44 @@ export function usePlatformInventory(filter: PlatformInventoryFilter = {}) {
   });
 }
 
-export function usePlatformInventoryCatalog() {
+export function usePlatformInventoryCatalog(brandId?: string) {
   return useQuery({
-    queryKey: queryKeys.platformInventoryCatalog,
+    queryKey: [...queryKeys.platformInventoryCatalog, brandId ?? "all"] as const,
     queryFn: async () => {
-      const res = await api.get<unknown>("/accountant/inventory/catalog");
+      const res = await api.get<unknown>("/accountant/inventory/catalog", {
+        params: brandId ? { brandId } : undefined,
+      });
       return res.data;
+    },
+  });
+}
+
+// GET /accountant/inventory/brands — brand pills w/ branchCount + itemCount.
+// Empty scope → 200 + [].
+export function useAccountantInventoryBrands() {
+  return useQuery({
+    queryKey: queryKeys.platformInventoryBrands,
+    queryFn: async () => {
+      const res = await api.get<
+        { data: unknown[] } | unknown[]
+      >("/accountant/inventory/brands");
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+  });
+}
+
+// GET /accountant/inventory/brands/{brandId}/branches — branch pills for a brand.
+export function useAccountantInventoryBrandBranches(brandId?: string) {
+  return useQuery({
+    queryKey: queryKeys.platformInventoryBrandBranches(brandId ?? ""),
+    enabled: Boolean(brandId),
+    queryFn: async () => {
+      const res = await api.get<
+        { data: unknown[] } | unknown[]
+      >(`/accountant/inventory/brands/${brandId}/branches`);
+      const d = res.data;
+      return Array.isArray(d) ? d : (d.data ?? []);
     },
   });
 }
