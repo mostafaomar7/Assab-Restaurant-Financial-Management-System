@@ -212,11 +212,11 @@ export function usePlatformInventory(filter: PlatformInventoryFilter = {}) {
   return useQuery({
     queryKey: queryKeys.platformInventory(filter),
     queryFn: async () => {
-      const res = await api.get<
-        Page<PlatformInventoryBranch> | PlatformInventoryBranch[]
-      >("/accountant/inventory", { params: filter });
-      const d = res.data;
-      return Array.isArray(d) ? d : (d.data ?? []);
+      // This endpoint returns a NAMED-KEY object { branches, summary } — not a list
+      // and not { data }. Return it raw; the defensive list-unwrap would collapse it
+      // to [] and blank the inventory-review screen (zero branches).
+      const res = await api.get<unknown>("/accountant/inventory", { params: filter });
+      return res.data as any;
     },
   });
 }

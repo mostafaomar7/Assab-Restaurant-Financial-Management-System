@@ -23,6 +23,7 @@ import {
   usePlatformAssets,
   usePlatformAssetDrafts,
   usePlatformInventory,
+  useDailyReconciliation,
   usePlatformInventoryCatalog,
   usePlatformInventoryDailyList,
   useSavePlatformDailyInventoryList,
@@ -228,6 +229,7 @@ import {
   useAssetCategories,
   // T06 — purchases (3-way match, company-surface handlers, shared)
   usePurchasesList,
+  usePatchPurchaseLine,
   useSuppliers,
   usePurchaseReturns,
   // T07 — waste mutations + inventory export (company-surface handlers, shared)
@@ -320,6 +322,7 @@ interface Op {
   brandId?: string;
   brandName?: string;
   branchId?: string;
+  supplierName?: string;      // present on purchases/expenses rows
   operationDate?: string;     // raw ISO date for date-range filtering
   submittedBy?: string;
   reviewedBy?: string;
@@ -716,6 +719,17 @@ const MODULE_TO_NAV: Record<ModuleKey, string> = {
   inventory:"acc-inventory", shifts:"acc-shifts", employees:"acc-employees", cash:"acc-cash",
 };
 
+// Destination for the "View" action on an inbox row — routed by the op's module so a
+// purchase/inventory/shift row lands on ITS screen, not the sales-reconciliation view.
+const opDetailPage = (mk: string): string => {
+  if (mk === "sales") return "acc-sales-detail";
+  const map: Record<string,string> = {
+    expenses:"acc-expenses", purchases:"acc-purchases", inventory:"acc-inventory",
+    shifts:"acc-shifts", waste:"acc-waste", cash:"acc-cash", employees:"acc-employees",
+  };
+  return map[mk] ?? "acc-sales-detail";
+};
+
 // Two-letter avatar from a real name ("أحمد محمد" → "أم"); falls back to the first two chars.
 const nameInitials = (n:string) => {
   const parts = String(n||"").trim().split(/\s+/).filter(Boolean);
@@ -737,6 +751,23 @@ const formatTodayLong = (lang:"ar"|"en", d:Date = new Date()) =>
 /** "أكتوبر 2025" / "October 2025" for the current month. */
 const formatMonthLong = (lang:"ar"|"en", d:Date = new Date()) =>
   lang === "ar" ? `${AR_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}` : `${EN_MONTHS_LONG[d.getMonth()]} ${d.getFullYear()}`;
+// Top-bar period filter → server-side dateFrom/dateTo (inclusive, YYYY-MM-DD) over
+// the real clock. "all" sends nothing (default), so nothing is hidden.
+type OpPeriod = "all" | "month" | "week" | "today";
+const isoDay = (d: Date) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+function periodRange(period: OpPeriod): { dateFrom?: string; dateTo?: string } {
+  if (period === "all") return {};
+  const now = new Date();
+  const today = isoDay(now);
+  if (period === "today") return { dateFrom: today, dateTo: today };
+  if (period === "week") {
+    const start = new Date(now);
+    start.setDate(now.getDate() - now.getDay()); // week starts Sunday
+    return { dateFrom: isoDay(start), dateTo: today };
+  }
+  return { dateFrom: isoDay(new Date(now.getFullYear(), now.getMonth(), 1)), dateTo: today }; // month
+}
+
 /** "14 أكتوبر 2025" / "October 14, 2025" — no weekday. Returns "" for a bad/empty date. */
 const formatDateLong = (lang:"ar"|"en", iso?:string|null) => {
   if (!iso) return "";
@@ -1770,8 +1801,9 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
 // ─────────────────────────────────────────────
 // APP SHELL
 // ─────────────────────────────────────────────
-function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove, returnForReview, addCorrectiveOp, markErpPosted, navigate, logout, setModal, setDetailId }:{
+function AppShell({ state, ops, period, setPeriod, approveOp, rejectOp, finalApproveOp, bulkApprove, returnForReview, addCorrectiveOp, markErpPosted, navigate, logout, setModal, setDetailId }:{
   state:AppState; ops:Op[];
+  period:OpPeriod; setPeriod:(p:OpPeriod)=>void;
   approveOp:(id:string)=>void; rejectOp:(id:string,r:string)=>void;
   finalApproveOp:(id:string, conditional?:{note:string})=>void; bulkApprove:(ids:string[])=>void;
   returnForReview?:(id:string, note?:string)=>void;
@@ -1818,10 +1850,11 @@ function AppShell({ state, ops, approveOp, rejectOp, finalApproveOp, bulkApprove
             <div className="text-xs text-gray-400 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg hidden sm:block">
               {formatTodayLong(lang)}
             </div>
-            <select className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 bg-gray-50">
-              <option>{tL("هذا الشهر","This Month")}</option>
-              <option>{tL("هذا الأسبوع","This Week")}</option>
-              <option>{tL("اليوم","Today")}</option>
+            <select value={period} onChange={e=>setPeriod(e.target.value as OpPeriod)} className="text-xs border border-gray-200 rounded-lg px-3 py-1.5 text-gray-600 bg-gray-50">
+              <option value="all">{tL("الكل","All")}</option>
+              <option value="month">{tL("هذا الشهر","This Month")}</option>
+              <option value="week">{tL("هذا الأسبوع","This Week")}</option>
+              <option value="today">{tL("اليوم","Today")}</option>
             </select>
             <GlobalSearch t={tL} theme="light"/>
             {/* Language Globe */}
@@ -2039,7 +2072,7 @@ function applyFilters(ops:Op[], f:Filters, moduleKey?:ModuleKey): Op[] {
     if(f.branch && op.branch!==f.branch) return false;
     if(f.status && op.status!==f.status) return false;
     if(f.match && op.match!==f.match) return false;
-    if(f.search && !op.branch.includes(f.search) && !op.id.includes(f.search) && !op.moduleLabel.includes(f.search)) return false;
+    if(f.search && !op.branch.includes(f.search) && !op.id.includes(f.search) && !op.moduleLabel.includes(f.search) && !(op.supplierName ?? "").includes(f.search) && !(op.brandName ?? "").includes(f.search)) return false;
     return true;
   });
 }
@@ -2210,7 +2243,10 @@ function mapApiOpToOp(a: any): Op {
     branch: a.branchName ?? a.branchId ?? "—",
     moduleKey: a.moduleKey,
     moduleLabel: OP_MODULE_LABELS[a.moduleKey] ?? a.moduleKey ?? "",
-    amount: typeof a.amountHalalas === "number" ? Math.round(a.amountHalalas / 100) : (a.amount ?? 0),
+    // Money always arrives in halalas (amountHalalas, or amount as the halalas int) —
+    // divide in BOTH branches so a row without amountHalalas is never shown ×100.
+    amount: typeof a.amountHalalas === "number" ? Math.round(a.amountHalalas / 100) : Math.round((a.amount ?? 0) / 100),
+    supplierName: a.supplierName ?? undefined,
     timeAgo: relativeTimeAr(a.operationDate ?? a.createdAt),
     operationDate: a.operationDate ?? a.createdAt ?? undefined,
     accountantId: a.accountantId ?? undefined,
@@ -3426,7 +3462,7 @@ function AccDashboard({ navigate, setModal, setDetailId, ops, approveOp, rejectO
           ? <EmptyState icon="✅" title={t("لا توجد عمليات","No Operations")} desc={t("تم معالجة جميع العمليات أو لا تطابق الفلاتر المحددة","All operations processed or no matches for the selected filters")}/>
           : displayed.slice(0,8).map(op=>(
               <OpRow key={op.id} op={op}
-                onView={()=>{ setDetailId(op.id); navigate("acc-sales-detail"); }}
+                onView={()=>{ setDetailId(op.id); navigate(opDetailPage(op.moduleKey) as PageId); }}
                 onApprove={()=>approveOp(op.id)}
                 onReject={()=>{ setDetailId(op.id); setModal("reject"); }}/>
             ))
@@ -3475,7 +3511,7 @@ function AccModulePage({ moduleKey, title, navigate, setModal, setDetailId, ops,
           ? <EmptyState icon="✅" title={t("لا توجد عمليات","No Operations")} desc={t("لا توجد عمليات تطابق الفلاتر المحددة","No operations match the selected filters")}/>
           : filtered.map(op=>(
               <OpRow key={op.id} op={op}
-                onView={()=>{ setDetailId(op.id); navigate("acc-sales-detail"); }}
+                onView={()=>{ setDetailId(op.id); navigate(opDetailPage(op.moduleKey) as PageId); }}
                 onApprove={()=>approveOp(op.id)}
                 onReject={()=>{ setDetailId(op.id); setModal("reject"); }}/>
             ))
@@ -3635,7 +3671,7 @@ function AccSalesPage({ navigate, setModal, setDetailId, ops, approveOp, rejectO
           ? <EmptyState icon="✅" title={t("لا توجد بيانات","No Data")} desc={t("لا توجد بيانات تطابق الفلاتر المحددة","No data matches the selected filters")}/>
           : filtered.map(op=>(
               <OpRow key={op.id} op={op}
-                onView={()=>{ setDetailId(op.id); navigate("acc-sales-detail"); }}
+                onView={()=>{ setDetailId(op.id); navigate(opDetailPage(op.moduleKey) as PageId); }}
                 onApprove={()=>approveOp(op.id)}
                 onReject={()=>{ setDetailId(op.id); setModal("reject"); }}/>
             ))
@@ -4978,6 +5014,110 @@ function PurItemsTable({ items, verifiedMap, onToggleVerify }: { items:PurItem[]
   );
 }
 
+// Real PUR- detail: reads the canonical `purchases.purchaseItems[]` from
+// GET /operations/{id} (ordQty vs rcvQty, "—" for null, server-computed totals +
+// lineMatch), renders the supersedes banner, and edits a line via
+// PATCH /company/me/operations/{id}/purchase-lines/{rowId}. Falls back to the rich
+// demo panel (demoRender) when the backend has no real lines yet.
+function PurchaseLinesPanel({ rec, t, onAttach, demoRender }:{
+  rec: any; t:(ar:string,en:string)=>string; onAttach:()=>void; demoRender:()=>ReactNode;
+}) {
+  const { data: detail, isLoading } = useOperation(rec.id);
+  const patchMut = usePatchPurchaseLine();
+  const [editRow, setEditRow] = useState<string|null>(null);
+  const [form, setForm] = useState<{ordQty:string;rcvQty:string;price:string}>({ordQty:"",rcvQty:"",price:""});
+
+  const pur = (detail as any)?.purchases;
+  const realItems: any[] = Array.isArray(pur?.purchaseItems) ? pur.purchaseItems : [];
+  if (realItems.length === 0) {
+    if (isLoading) return <div className="px-5 py-6 text-center text-sm text-gray-400">{t("جارٍ التحميل...","Loading...")}</div>;
+    return <>{demoRender()}</>;
+  }
+
+  const supersedesId = (detail as any)?.payload?.supersedesOperationId;
+  const supplierName = pur?.supplierName ?? rec.supplier;
+  const orderNumber  = (detail as any)?.payload?.orderNumber;
+  const submittedBy  = (detail as any)?.payload?.submittedBy;
+  const summary      = pur?.summary;
+  const sar = (h:any) => typeof h === "number" ? `${fmtAmt(h/100)} ${t("ر.س","SAR")}` : "—";
+
+  const startEdit = (row:any) => { setEditRow(row.rowId); setForm({ ordQty:String(row.ordQty ?? ""), rcvQty: row.rcvQty==null ? "" : String(row.rcvQty), price:String(row.unitPriceHalalas ?? "") }); };
+  const saveEdit = (rowId:string) => {
+    const patch: { ordQty?:number; rcvQty?:number|null; unitPriceHalalas?:number } = {};
+    if (form.ordQty.trim() !== "") patch.ordQty = Number(form.ordQty);
+    patch.rcvQty = form.rcvQty.trim() === "" ? null : Number(form.rcvQty);   // explicit null clears receipt
+    if (form.price.trim() !== "") patch.unitPriceHalalas = Math.round(Number(form.price));
+    patchMut.mutate({ operationId: rec.id, rowId, patch }, { onSuccess: ()=>setEditRow(null) });
+  };
+
+  return (
+    <div className="px-5 pb-5 bg-gray-50/40 space-y-3">
+      {supersedesId && (
+        <div className="mt-3 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs text-amber-800">
+          <RotateCcw size={13} className="flex-shrink-0"/> {t("نسخة معدّلة من عملية مرفوضة سابقة.","Revised copy of a previously rejected operation.")}
+        </div>
+      )}
+      <div className="flex items-center gap-4 mt-3 p-3 bg-white rounded-xl border border-blue-100 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <p className="text-xs font-bold text-gray-700">{t("المورد:","Supplier:")} <span className="text-blue-700">{supplierName ?? "—"}</span></p>
+          <p className="text-xs text-gray-500 mt-0.5">
+            {orderNumber ? <>{t("رقم الطلب:","Order #:")} <span className="font-mono font-semibold text-purple-600">{orderNumber}</span> · </> : null}
+            {rec.date}{submittedBy ? ` · ${t("قدّمها","by")} ${submittedBy}` : ""}
+          </p>
+        </div>
+        <button onClick={onAttach} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-100 text-xs font-semibold transition-all">
+          <Paperclip size={11}/> {t("المرفقات","Attachments")}
+        </button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full border border-gray-100 rounded-xl overflow-hidden text-xs" dir="rtl">
+          <thead className="bg-gray-100"><tr>
+            <th className="px-3 py-2 text-right font-semibold text-gray-600">{t("الصنف","Item")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("الوحدة","Unit")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("المطلوب","Ordered")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-emerald-700 bg-emerald-50/50">{t("المستلم","Received")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("سعر الوحدة","Unit Price")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("قيمة المطلوب","Ordered Value")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-gray-600">{t("المطابقة","Match")}</th>
+            <th className="px-3 py-2 text-center font-semibold text-purple-700">{t("تعديل","Edit")}</th>
+          </tr></thead>
+          <tbody className="divide-y divide-gray-100 bg-white">
+            {realItems.map((row:any)=>{
+              const editing = editRow===row.rowId;
+              const lm = row.lineMatch ?? {};
+              const mcls = lm.key==="matched"?"bg-emerald-50 text-emerald-700":lm.key==="diff"?"bg-red-50 text-red-700":"bg-amber-50 text-amber-700";
+              return (
+                <tr key={row.rowId} className="hover:bg-gray-50">
+                  <td className="px-3 py-2.5 font-semibold text-gray-800">{row.item ?? "—"}</td>
+                  <td className="px-3 py-2.5 text-center text-gray-500">{row.unit ?? "—"}</td>
+                  <td className="px-3 py-2.5 text-center font-mono">{editing ? <input value={form.ordQty} onChange={e=>setForm(f=>({...f,ordQty:e.target.value}))} className="w-16 text-center border border-purple-200 rounded-lg px-1 py-0.5 outline-none focus:border-purple-400"/> : (row.ordQty ?? "—")}</td>
+                  <td className="px-3 py-2.5 text-center font-mono">{editing ? <input value={form.rcvQty} onChange={e=>setForm(f=>({...f,rcvQty:e.target.value}))} placeholder="—" className="w-16 text-center border border-purple-200 rounded-lg px-1 py-0.5 outline-none focus:border-purple-400"/> : (row.rcvQty==null ? "—" : row.rcvQty)}</td>
+                  <td className="px-3 py-2.5 text-center font-mono">{editing ? <input value={form.price} onChange={e=>setForm(f=>({...f,price:e.target.value}))} placeholder={t("هللة","halalas")} className="w-20 text-center border border-purple-200 rounded-lg px-1 py-0.5 outline-none focus:border-purple-400"/> : sar(row.unitPriceHalalas)}</td>
+                  <td className="px-3 py-2.5 text-center font-mono text-blue-700">{sar(row.totalHalalas)}</td>
+                  <td className="px-3 py-2.5 text-center"><span className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${mcls}`}>{lm.icon ?? ""} {lm.labelAr ?? "—"}</span></td>
+                  <td className="px-3 py-2.5 text-center">
+                    {editing
+                      ? <div className="flex gap-1 justify-center">
+                          <button onClick={()=>saveEdit(row.rowId)} disabled={patchMut.isPending} className="px-2 py-0.5 rounded bg-emerald-500 text-white text-[10px] font-bold disabled:opacity-50">{t("حفظ","Save")}</button>
+                          <button onClick={()=>setEditRow(null)} className="px-2 py-0.5 rounded bg-gray-100 text-gray-600 text-[10px]">✕</button>
+                        </div>
+                      : <button onClick={()=>startEdit(row)} className="text-purple-500 hover:text-purple-700"><Edit3 size={13}/></button>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      {summary && (
+        <p className="text-[10px] text-gray-500 text-left">
+          {t("قيمة المطلوب:","Ordered:")} {sar(summary.orderedValueHalalas)} · {t("المستلم:","Received:")} {sar(summary.receivedValueHalalas)} · {t("فروقات:","Discrepancies:")} {(summary.qtyDiscrepancyCount ?? 0)+(summary.priceDiscrepancyCount ?? 0)}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════
 // ACCOUNTANT PURCHASES — Dual-Lens Professional View
 // ════════════════════════════════════════════════════════════
@@ -5004,9 +5144,23 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
   const [editingRecId,    setEditingRecId]    = useState<string|null>(null);
   const [purAttachModal,  setPurAttachModal]  = useState<{recId:string; invNum:string; idx:number; total:number}|null>(null);
 
-  // Use API purchases records when present, else fall back to inline PUR_RECORDS.
-  const apiPurRecords = (purchasesApi as any)?.purchases ?? (purchasesApi as any)?.records;
-  const EFFECTIVE_PUR_RECORDS = ((apiPurRecords as any)?.length > 0 ? apiPurRecords : PUR_RECORDS) as typeof PUR_RECORDS;
+  // Build the purchases list from the real operations feed (GET /accountant/operations
+  // ?moduleKey=purchases) — the rows carry names/amount/date/match; the line items load
+  // per-op in PurchaseLinesPanel. Fall back to the inline demo when the feed is empty.
+  const realPurRecords: any[] = Array.isArray(purchasesApi)
+    ? (purchasesApi as any[]).map(o => ({
+        id: o?.publicId ?? o?.id ?? "",
+        branch: o?.branchName ?? o?.branchId ?? "—",
+        supplier: o?.supplierName ?? "—",
+        invNum: o?.publicId ?? "—",
+        date: o?.date ?? (o?.operationDate ? String(o.operationDate).slice(0,10) : "—"),
+        status: o?.status ?? "pending",
+        match: o?.match ?? "exact",
+        amount: typeof o?.amount === "number" ? o.amount/100 : 0,   // halalas → SAR
+        items: [],
+      }))
+    : [];
+  const EFFECTIVE_PUR_RECORDS = (realPurRecords.length > 0 ? realPurRecords : PUR_RECORDS) as typeof PUR_RECORDS;
 
   const SUPPLIER_LIST = [...new Set(EFFECTIVE_PUR_RECORDS.map((r:any)=>r.supplier))];
   const BRANCH_LIST   = [...new Set(EFFECTIVE_PUR_RECORDS.map((r:any)=>r.branch))];
@@ -5392,7 +5546,7 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
                             <span className="font-mono font-bold text-gray-800">{fmtAmt(rec.amount)} {t("ر.س","SAR")}</span>
                             {expandedId===rec.id?<ChevronUp size={13} className="text-gray-400"/>:<ChevronDown size={13} className="text-gray-400"/>}
                           </div>
-                          {expandedId===rec.id && renderItemsPanel(rec)}
+                          {expandedId===rec.id && <PurchaseLinesPanel rec={rec} t={t} onAttach={()=>setPurAttachModal({recId:rec.id, invNum:rec.invNum, idx:0, total:(rec.items?.length ?? 0)})} demoRender={()=>renderItemsPanel(rec)}/>}
                         </div>
                       );
                     })}
@@ -5456,7 +5610,7 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
                             <span className="font-mono font-bold text-gray-800">{fmtAmt(rec.amount)} {t("ر.س","SAR")}</span>
                             {expandedId===rec.id?<ChevronUp size={13} className="text-gray-400"/>:<ChevronDown size={13} className="text-gray-400"/>}
                           </div>
-                          {expandedId===rec.id && renderItemsPanel(rec)}
+                          {expandedId===rec.id && <PurchaseLinesPanel rec={rec} t={t} onAttach={()=>setPurAttachModal({recId:rec.id, invNum:rec.invNum, idx:0, total:(rec.items?.length ?? 0)})} demoRender={()=>renderItemsPanel(rec)}/>}
                         </div>
                       );
                     })}
@@ -5528,14 +5682,77 @@ function AccPurchases({ navigate, setModal, setDetailId, ops, approveOp, rejectO
 // Per-branch inventory rows come from the platform API; empty until the backend returns them.
 const INV_BRANCH_DATA: Record<string, {item:string; cat:string; unit:string; prev:number; curr:number}[]> = {};
 
+// Real daily reconciliation for a branch — GET /accountant/inventory/branches/{id}/
+// daily-reconciliation?date=. Terms are QUANTITIES (opening/received/consumed/waste/
+// transfers/expected/actual); money only in the variance value. Shows an honest
+// empty state when there's no data for that date — NEVER fabricated numbers.
+function DailyInvEquation({ branchId, date }:{ branchId?:string; date?:string }) {
+  const { t } = useLang();
+  const { data, isLoading } = useDailyReconciliation(branchId, date);
+  const items: any[] = Array.isArray((data as any)?.items) ? (data as any).items : [];
+  if (items.length === 0) {
+    return (
+      <div className="py-6 text-center text-sm text-gray-400">
+        {isLoading ? t("جارٍ التحميل...","Loading...") : t("لا توجد بيانات جرد يومي لهذا اليوم","No daily reconciliation data for this date")}
+      </div>
+    );
+  }
+  const q = (v:any) => typeof v === "number" ? v.toLocaleString(undefined,{maximumFractionDigits:3}) : "—";
+  const totalVarVal = (data as any)?.totalVarianceValueHalalas;
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-[11px] border border-indigo-100 rounded-lg overflow-hidden" dir="rtl">
+        <thead className="bg-indigo-50/60 text-indigo-700"><tr>
+          <th className="px-2 py-1.5 text-right">{t("الصنف","Item")}</th>
+          <th className="px-2 py-1.5 text-center">{t("فتح","Open")}</th>
+          <th className="px-2 py-1.5 text-center">{t("وارد","Recv")}</th>
+          <th className="px-2 py-1.5 text-center">{t("مستهلك","Used")}</th>
+          <th className="px-2 py-1.5 text-center">{t("هدر","Waste")}</th>
+          <th className="px-2 py-1.5 text-center">{t("تحويلات","Xfer")}</th>
+          <th className="px-2 py-1.5 text-center">{t("متوقع","Exp.")}</th>
+          <th className="px-2 py-1.5 text-center">{t("فعلي","Act.")}</th>
+          <th className="px-2 py-1.5 text-center">{t("فرق","Var")}</th>
+        </tr></thead>
+        <tbody className="divide-y divide-gray-50 bg-white">
+          {items.map((it:any,k:number)=>{
+            const flagged = it.status==="flagged" || it.equationMatch===false;
+            const vq = typeof it.varianceQty==="number" ? it.varianceQty : 0;
+            return (
+              <tr key={it.itemId ?? k} className={flagged?"bg-red-50/40":""}>
+                <td className="px-2 py-1.5 font-semibold text-gray-700">{it.itemName ?? it.name ?? "—"}{it.unit?<span className="text-gray-400 font-normal"> ({it.unit})</span>:null}</td>
+                <td className="px-2 py-1.5 text-center font-mono">{q(it.opening)}</td>
+                <td className="px-2 py-1.5 text-center font-mono text-emerald-700">{q(it.received)}</td>
+                <td className="px-2 py-1.5 text-center font-mono">{q(it.consumed)}</td>
+                <td className="px-2 py-1.5 text-center font-mono text-rose-600">{q(it.waste)}</td>
+                <td className="px-2 py-1.5 text-center font-mono text-blue-700">{q(it.transfers)}</td>
+                <td className="px-2 py-1.5 text-center font-mono text-indigo-700">{q(it.expectedClosing ?? it.expectedQty)}</td>
+                <td className="px-2 py-1.5 text-center font-mono">{q(it.actualClosing ?? it.actualQty)}</td>
+                <td className={`px-2 py-1.5 text-center font-mono font-bold ${vq>0?"text-red-600":vq<0?"text-emerald-600":"text-gray-400"}`}>{q(it.varianceQty)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {typeof totalVarVal === "number" && (
+        <p className="text-[11px] text-gray-600 mt-2 text-left">{t("إجمالي قيمة الفرق:","Total variance value:")} <span className="font-mono font-bold text-red-700">{fmtAmt(Math.abs(totalVarVal)/100)} {t("ر.س","SAR")}</span></p>
+      )}
+    </div>
+  );
+}
+
 function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailId, bulkApprove }:PageProps) {
   const { t, lang, dir } = useLang();
   const en = lang === "en";
   const { data: inventoryApi } = usePlatformInventory();
   const exportInvMut = useExportInventory();
-  // Use API per-branch inventory rows when present, else inline INV_BRANCH_DATA.
-  const apiBranchInventory = (inventoryApi as any)?.branches ?? (inventoryApi as any)?.byBranch;
-  const EFFECTIVE_INV_BRANCH_DATA = (apiBranchInventory && Object.keys(apiBranchInventory).length > 0 ? apiBranchInventory : INV_BRANCH_DATA) as typeof INV_BRANCH_DATA;
+  // GET /accountant/inventory → { branches:[{branchName, branchId, items[], …}], summary }.
+  // Derive the branch list + a name→items map + name→id map from the real array (the
+  // module-level BRANCHES is empty, which is why the review used to show zero branches).
+  const invBranchesArr: any[] = Array.isArray((inventoryApi as any)?.branches) ? (inventoryApi as any).branches : [];
+  const branchNames: string[] = invBranchesArr.length ? invBranchesArr.map(b=>String(b?.branchName ?? b?.branchId ?? "—")) : BRANCHES;
+  const branchIdByName: Record<string,string> = Object.fromEntries(invBranchesArr.map(b=>[String(b?.branchName ?? ""), String(b?.branchId ?? "")]));
+  const apiBranchInventory: Record<string,any[]> = Object.fromEntries(invBranchesArr.map(b=>[String(b?.branchName ?? ""), Array.isArray(b?.items)?b.items:[]]));
+  const EFFECTIVE_INV_BRANCH_DATA = (invBranchesArr.length > 0 ? apiBranchInventory : INV_BRANCH_DATA) as typeof INV_BRANCH_DATA;
   const [expandedBranch, setExpandedBranch] = useState<string|null>(null);
   const [dailyBranch,    setDailyBranch]    = useState<string|null>(null);
   const [invType,        setInvType]        = useState<"monthly"|"daily">("monthly");
@@ -5652,7 +5869,7 @@ function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailI
             </p>
           </div>
         </div>
-        {BRANCHES.slice(0,4).map((branch,bi)=>{
+        {branchNames.slice(0,8).map((branch,bi)=>{
           const branchOp  = invOps.find(o=>o.branch===branch);
           const items     = (EFFECTIVE_INV_BRANCH_DATA as any)[branch] || [];
           const isExpanded  = expandedBranch===branch;
@@ -5817,33 +6034,7 @@ function AccInventory({ navigate, ops, approveOp, rejectOp, setModal, setDetailI
                   <div className="px-5 pb-4 bg-indigo-50/30">
                     <p className="text-[11px] font-bold text-indigo-700 mb-2 pt-2">{t("معادلة الجرد اليومي","Daily Inventory Reconciliation")} — {branch}</p>
                     <div className="bg-white rounded-xl border border-indigo-100 p-4" dir={dir}>
-                      <div className="space-y-2 text-sm">
-                        {[
-                          {label:"رصيد الفتح (أمس)",         val:12400, sign:"",  cls:"text-gray-800" },
-                          {label:"+ مشتريات اليوم",           val:3200,  sign:"+", cls:"text-emerald-700"},
-                          {label:"− مبيعات اليوم",            val:8700,  sign:"−", cls:"text-red-600"  },
-                          {label:"+ تحويلات واردة",           val:500,   sign:"+", cls:"text-blue-700"  },
-                          {label:"− تحويلات صادرة",           val:700,   sign:"−", cls:"text-orange-600"},
-                          {label:"− الهدر والتالف",           val:360,   sign:"−", cls:"text-rose-600"  },
-                        ].map((row,k)=>(
-                          <div key={k} className="flex items-center justify-between py-1 border-b border-gray-50 last:border-0">
-                            <span className={`font-medium ${row.cls}`}>{row.label}</span>
-                            <span className={`font-mono font-bold ${row.cls}`}>{row.sign}{fmtAmt(Math.abs(row.val))} ر.س</span>
-                          </div>
-                        ))}
-                        <div className="flex items-center justify-between pt-2 border-t-2 border-indigo-200 mt-1">
-                          <span className="font-bold text-gray-900">= رصيد الإغلاق المحاسبي</span>
-                          <span className="font-black text-indigo-700 font-mono">{fmtAmt(12400+3200-8700+500-700-360)} ر.س</span>
-                        </div>
-                        <div className="flex items-center justify-between py-1">
-                          <span className="font-medium text-gray-700">رصيد الجرد الفعلي</span>
-                          <span className="font-mono font-bold text-gray-800">{fmtAmt(ACTUAL)} ر.س</span>
-                        </div>
-                        <div className="flex items-center justify-between py-1 bg-red-50/60 -mx-2 px-2 rounded-lg">
-                          <span className="font-bold text-red-700">عجز مُكتشف</span>
-                          <span className="font-black text-red-700 font-mono">−{fmtAmt(DEFICIT)} ر.س</span>
-                        </div>
-                      </div>
+                      <DailyInvEquation branchId={branchIdByName[branch] || branchOp?.branchId} date={branchOp?.operationDate ? String(branchOp.operationDate).slice(0,10) : undefined}/>
 
                       {/* Multi-employee variance assignment */}
                       <div className="mt-4 pt-3 border-t border-indigo-100">
@@ -7541,6 +7732,9 @@ function AccAssets({ navigate }: PageProps) {
     case_:"branch_upload"|"acc_register"; status:AssetStatus; invNum:string;
     submittedBy:string; date:string; custodian:string;
     history:TransferLog[];
+    // Server-provided display strings — prefer these over the local maps so live
+    // statuses (active/maintenance/retired) and categories (kitchen/…) render right.
+    statusLabelAr?:string; categoryLabelAr?:string; purchaseDate?:string;
   }
 
   const CAT_ICON: Record<AssetCat,string> = { "معدات":"🔧","تقنية":"💻","أثاث":"🪑","مركبات":"🚗","أخرى":"📦" };
@@ -7565,7 +7759,7 @@ function AccAssets({ navigate }: PageProps) {
       const cost = a?.costHalalas != null ? num(a.costHalalas)/100 : num(a?.cost);
       const book = a?.bookValueHalalas != null ? num(a.bookValueHalalas)/100 : (a?.book != null ? num(a.book) : cost);
       return {
-        id: a?.id ?? `FA-${i+1}`,
+        id: a?.publicId ?? a?.id ?? `FA-${i+1}`,
         name: a?.name ?? "—",
         cat: CAT_MAP[String(a?.cat ?? a?.category ?? "")] ?? "أخرى",
         branch: a?.branch ?? a?.branchName ?? a?.branchId ?? "—",
@@ -7575,9 +7769,12 @@ function AccAssets({ navigate }: PageProps) {
         status: STATUSES.includes(a?.status) ? a.status : "pending_accountant",
         invNum: a?.invNum ?? "—",
         submittedBy: a?.submittedBy ?? "—",
-        date: a?.date ?? a?.createdAt ?? "—",
+        date: a?.purchaseDate ?? a?.date ?? a?.createdAt ?? "—",
         custodian: a?.custodian ?? "قيد التعيين",
         history: Array.isArray(a?.history) ? a.history : [],
+        statusLabelAr: a?.statusLabelAr ?? undefined,
+        categoryLabelAr: a?.categoryLabelAr ?? undefined,
+        purchaseDate: a?.purchaseDate ?? undefined,
       };
     }));
   }, [apiAssetsList]);
@@ -7649,9 +7846,12 @@ function AccAssets({ navigate }: PageProps) {
       ? apiAssetsList.find((a:any)=>(a?.branchName ?? a?.branch)===newAsset.branch)?.branchId
       : undefined;
     if (branchId) {
+      // Backend stores `category` verbatim (string, no enum) and filters/KPIs break
+      // on Arabic labels — send the canonical English key, not the display label.
+      const CAT_KEY: Record<string,string> = { "معدات":"kitchen", "تقنية":"tech", "أثاث":"furniture", "مركبات":"vehicles", "أخرى":"other" };
       createAssetMut.mutate({
         name: newAsset.name,
-        category: newAsset.cat,
+        category: CAT_KEY[newAsset.cat] ?? "other",
         branchId,
         cost: Math.round((parseFloat(newAsset.cost)||0)*100),   // SAR → halalas
         usefulLifeMonths: parseInt(newAsset.usefulLife)||60,
@@ -7680,8 +7880,8 @@ function AccAssets({ navigate }: PageProps) {
     if(filterStatus!=="الكل" && a.status!==filterStatus) return false;
     if(filterCat!=="الكل" && a.cat!==filterCat) return false;
     if(filterYear!=="الكل") {
-      const yearMap:Record<string,string[]> = {"2025":["FA-001","FA-002","FA-003","FA-005","FA-006"],"2024":["FA-004"]};
-      if(!(yearMap[filterYear]||[]).includes(a.id)) return false;
+      // Year from the real purchaseDate (YYYY-…) — not a hardcoded id list.
+      if((a.purchaseDate ?? a.date ?? "").slice(0,4) !== filterYear) return false;
     }
     return true;
   });
@@ -7956,7 +8156,7 @@ function AccAssets({ navigate }: PageProps) {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-center">
-                            <Badge className="bg-gray-100 text-gray-600 text-[10px]">{a.cat}</Badge>
+                            <Badge className="bg-gray-100 text-gray-600 text-[10px]">{a.categoryLabelAr ?? a.cat}</Badge>
                           </td>
                           <td className="px-4 py-3 text-center font-mono font-bold text-gray-800">{fmtAmt(a.cost)}</td>
                           <td className="px-4 py-3 text-center font-mono text-gray-600">{fmtAmt(a.book)}</td>
@@ -7967,7 +8167,7 @@ function AccAssets({ navigate }: PageProps) {
                             </div>
                           </td>
                           <td className="px-4 py-3 text-center">
-                            <Badge className={`${cfg.cls} text-[10px]`}>{cfg.label}</Badge>
+                            <Badge className={`${cfg.cls} text-[10px]`}>{a.statusLabelAr ?? cfg.label}</Badge>
                           </td>
                           <td className="px-4 py-3 text-center">
                             <button onClick={()=>setExpandedId(expandedId===a.id?null:a.id)}
@@ -8083,8 +8283,8 @@ function AccAssets({ navigate }: PageProps) {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-semibold text-gray-800 text-sm">{a.name}</span>
-                        <Badge className="bg-gray-50 text-gray-600 border border-gray-200 text-[10px]">{a.cat}</Badge>
-                        <Badge className={`${cfg.cls} text-[10px]`}>{cfg.label}</Badge>
+                        <Badge className="bg-gray-50 text-gray-600 border border-gray-200 text-[10px]">{a.categoryLabelAr ?? a.cat}</Badge>
+                        <Badge className={`${cfg.cls} text-[10px]`}>{a.statusLabelAr ?? cfg.label}</Badge>
                         {a.case_==="branch_upload"
                           ? <Badge className="bg-blue-50 text-blue-600 text-[10px]"><Smartphone size={9} className="ml-0.5"/> مُرفوع من الفرع</Badge>
                           : <Badge className="bg-amber-50 text-amber-600 text-[10px]"><Clipboard size={9} className="ml-0.5"/> سجّله المحاسب</Badge>}
@@ -16230,17 +16430,22 @@ export function ASABPrototype() {
     }
     return { role: null, page: "", detailId: null, modal: null };
   });
+  // Top-bar period filter (server-side dateFrom/dateTo). Default "all" → no params,
+  // so nothing is hidden until the user picks a window. Applies to the operation
+  // lists only (per backend §d).
+  const [period, setPeriod] = useState<OpPeriod>("all");
+  const opsRange = periodRange(period);
   // Live operations from platform API — falls back to INITIAL_OPS when API returns empty.
   // Local setOps is preserved to drive optimistic UI for approve / reject / final-approve / ERP mutations.
   const isHead = appState.role === "head";
-  const { data: apiOps } = useAccountantOperationsPlatform({ pageSize: 100 });
+  const { data: apiOps } = useAccountantOperationsPlatform({ pageSize: 100, ...opsRange });
   // B-H1: head reads from the enriched /head/operations/* queues (accountantName, brandName,
   // branchName, amountHalalas baked in) — not the thin /accountant/operations shape.
   // NOTE: no `= []` defaults — a fresh [] literal each render would make these effect deps
   // unstable and loop setOps. Leave them `undefined` until react-query yields a stable ref.
-  const { data: headPendingOps }  = usePendingOperations({}, { enabled: isHead });
-  const { data: headFinalOps }    = useFinalApprovedOperations({}, { enabled: isHead });
-  const { data: headRejectedOps } = useRejectedOperations({}, { enabled: isHead });
+  const { data: headPendingOps }  = usePendingOperations(opsRange, { enabled: isHead });
+  const { data: headFinalOps }    = useFinalApprovedOperations(opsRange, { enabled: isHead });
+  const { data: headRejectedOps } = useRejectedOperations(opsRange, { enabled: isHead });
   const [ops, setOps] = useState<Op[]>([]);
   // Sync incoming live ops into local state when a non-empty batch arrives. A side effect, so
   // useEffect (not useMemo); deps are the stable react-query data refs.
@@ -16453,7 +16658,7 @@ export function ASABPrototype() {
     <LangContext.Provider value={{ lang, setLang, t, dir }}>
       <AssetDraftProvider>
         <AppShell
-          state={appState} ops={ops}
+          state={appState} ops={ops} period={period} setPeriod={setPeriod}
           approveOp={approveOp} rejectOp={rejectOp} finalApproveOp={finalApproveOp} bulkApprove={bulkApprove}
           returnForReview={returnForReview} addCorrectiveOp={addCorrectiveOp} markErpPosted={markErpPosted}
           navigate={navigate} logout={logout} setModal={setModal} setDetailId={setDetailId}

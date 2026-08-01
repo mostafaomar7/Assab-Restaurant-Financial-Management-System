@@ -518,6 +518,9 @@ export interface PlatformOpsFilter {
   match?: "exact" | "review" | "diff";
   erpPosted?: boolean;
   search?: string;
+  /** Top-bar period filter (inclusive, YYYY-MM-DD) — head operation lists accept these. */
+  dateFrom?: string;
+  dateTo?: string;
 }
 
 export interface PlatformErpFilter {
