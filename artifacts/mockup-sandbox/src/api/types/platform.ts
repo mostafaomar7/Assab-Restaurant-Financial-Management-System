@@ -164,7 +164,11 @@ export interface AdminRestaurantSubscription {
   plan: string;
   status: "active" | "warning" | "danger" | "expired" | string;
   expiresAt: string;
+  /** 2026-08-03: display-ready YYYY-MM-DD alongside the raw ISO `expiresAt`. */
+  expiresAtDate?: string;
   daysLeft: number;
+  /** 2026-08-03: computed from expires_at at read time — prefer over daysLeft<0. */
+  isExpired?: boolean;
   monthlyPrice: number;
   autoRenew: boolean;
   reminderEnabled: boolean;
@@ -177,6 +181,12 @@ export interface AdminSubscription {
   plan: string;
   status: string;
   expiresAt?: string;
+  /** 2026-08-03: display-ready YYYY-MM-DD alongside the raw ISO `expiresAt`. */
+  expiresAtDate?: string;
+  /** 2026-08-03: recomputed at read time (was a stale stored column). */
+  daysLeft?: number;
+  /** 2026-08-03: computed from expires_at at read time — prefer over daysLeft<0. */
+  isExpired?: boolean;
   monthlyPrice?: number;
   autoRenew?: boolean;
   reminderEnabled?: boolean;
@@ -289,13 +299,27 @@ export interface AdminUploadRow {
 
 export interface AdminBrandUploadStatus {
   uploads?: AdminUploadRow[];
-  // `shared.fixedAssets` was added when completionPct started counting four
-  // steps instead of three; a failed upload no longer counts as complete.
+  // The screen offers THREE shared catalog cards. As of 2026-08-03 `fixedAssets`
+  // moved OUT of `shared` (assets upload per branch) to a top-level
+  // `brandFixedAssets`, so «بيانات مشتركة» is 3/3 again. Kept optional here for
+  // back-compat with older four-key payloads.
   shared?: {
     sales?: boolean;
     materials?: boolean;
     suppliers?: boolean;
     fixedAssets?: boolean;
+  };
+  /** 2026-08-03: fixed-assets state, moved out of `shared`. */
+  brandFixedAssets?: boolean;
+  /**
+   * 2026-08-03: one block that feeds every «ملخص رفع البيانات» tile directly,
+   * so the cards no longer derive their own (previously wrong 3/4 · 75%) counts.
+   */
+  summary?: {
+    shared?: { done: number; total: number };
+    branchAssets?: { done: number; total: number };
+    restaurantEmployees?: { done: number; total: number };
+    completionPct?: number;
   };
   completionPct?: number;
   // legacy/compat — older payloads keyed progress per restaurant/branch
@@ -326,6 +350,7 @@ export interface AdminBranchFixedAssetsRow {
   restaurantId?: string;
   /** Tri-state so a failed upload is distinguishable from a never-uploaded one. */
   fixedAssetsStatus?: "done" | "failed" | "not_uploaded";
+  fixedAssetsCount?: number;
   fixedAssetsFailureReason?: string | null;
   reason?: string | null;
 }

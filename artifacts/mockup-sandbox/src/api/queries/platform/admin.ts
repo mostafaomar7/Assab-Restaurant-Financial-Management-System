@@ -1269,6 +1269,40 @@ export function useAdminModules() {
   });
 }
 
+// ─── Users lookup (shared /lookups/users) ─────────────────────────────────────
+// 2026-08-03: `GET /lookups/users?role=head` now returns a display-ready `label`
+// ("حسن رشدي — رئيس حسابات") + `roleLabel`/`status`, and drops the empty name of
+// an incomplete invite onto its email — so the «يرفع تقريره إلى» picker can tell
+// same-named heads apart instead of showing blank/ambiguous rows.
+export interface LookupUserRow {
+  id: string;
+  name?: string;
+  email?: string;
+  role?: string;
+  roleKey?: string;
+  roleLabel?: string;
+  status?: string;
+  label?: string;
+}
+export function useLookupUsers(
+  params: { role?: string; status?: string } = {},
+  opts: { enabled?: boolean } = {},
+) {
+  return useQuery({
+    queryKey: ["lookups", "users", params] as const,
+    enabled: opts.enabled,
+    queryFn: async () => {
+      const res = await api.get<Page<LookupUserRow> | LookupUserRow[]>(
+        "/lookups/users",
+        { params },
+      );
+      const d = res.data as Page<LookupUserRow> | LookupUserRow[];
+      return Array.isArray(d) ? d : (d.data ?? []);
+    },
+    staleTime: 60_000,
+  });
+}
+
 // ─── Reports ─────────────────────────────────────────────────────────────────
 export function useAdminReportsCatalog() {
   return useQuery({
@@ -1608,6 +1642,11 @@ export function useAdminUploadFixedAssets() {
       qc.invalidateQueries({
         queryKey: ["platform", "admin", "branches", vars.branchId, "upload-status"],
       });
+      // The «حالة الرفع» column reads GET /admin/brands/{id}/branches/upload-status
+      // and the summary reads GET /admin/brands/{id}/upload-status — both keyed
+      // under ["platform","admin","brands",…]. Without this the column stayed on
+      // «لم يُرفع» after a successful asset upload until a manual refresh.
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
       toast.success("تم رفع الأصول الثابتة");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -1616,16 +1655,31 @@ export function useAdminUploadFixedAssets() {
 
 export function useAdminUploadTemplate() {
   return useMutation({
+    // 2026-08-03: passing an owner id makes the endpoint ship that owner's SAVED
+    // rows (filename `{type}-data.xlsx`) instead of the blank sheet — re-download
+    // is now an edit surface, not a reset. No id → the blank template as before.
     mutationFn: async ({
       type,
       filename,
+      brandId,
+      branchId,
+      restaurantId,
     }: {
       type: AdminBrandUploadType;
       filename?: string;
+      brandId?: string;
+      branchId?: string;
+      restaurantId?: string;
     }) => {
+      const params: Record<string, string> = {};
+      if (brandId) params.brandId = brandId;
+      if (branchId) params.branchId = branchId;
+      if (restaurantId) params.restaurantId = restaurantId;
+      const hasOwner = Object.keys(params).length > 0;
       await downloadBlob(
         `/admin/upload/templates/${type}`,
-        filename ?? `admin-template-${type}.xlsx`,
+        filename ?? `${type}-${hasOwner ? "data" : "template"}.xlsx`,
+        hasOwner ? params : undefined,
       );
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),

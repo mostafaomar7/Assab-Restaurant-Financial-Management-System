@@ -109,6 +109,7 @@ import {
   useAdminBrandUploadStatus,
   useAdminRestaurantEmployeeStatus,
   useAdminBrandBranchesUploadStatus,
+  useLookupUsers,
   useAdminAccountantModules,
   useExportOperations,
   useExportHeadOperations,
@@ -1361,10 +1362,19 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
   // Roles that carry no company/brand scope at all: platform supplier, platform
   // procurement manager, and system admin (admin is forced to scope "all").
   const isScopeless       = isMorrad || isProcurement || isAdminRole;
-  // reportsTo must be a real head's userId.
-  const { data: headsApi } = useAdminUsers({ roleFilter: "head" });
+  // reportsTo must be a real head's userId. Source it from the enriched
+  // /lookups/users?role=head — it carries a display-ready `label`
+  // ("حسن رشدي — رئيس حسابات") and drops an incomplete invite's empty name onto
+  // its email, so same-named heads are distinguishable and no row is blank.
+  const { data: headsApi } = useLookupUsers({ role: "head", status: "active" });
   const headOptions = ((Array.isArray(headsApi) ? headsApi : (headsApi as any)?.data ?? []) as any[])
-    .map((h:any)=>({ id: h.id, name: h.name }));
+    .map((h:any)=>({
+      id: h.id,
+      label: h.label
+        ?? [h.name || h.email, h.roleLabel].filter(Boolean).join(" — ")
+        ?? h.name,
+    }))
+    .filter((h:any)=>h.id);
   // Brands/restaurants/branches come from the API (GET /admin/brands), not a static catalog.
   const { data: brandsApi } = useAdminBrands();
   // Selections are stored as IDs — the endpoint wants UUIDs, and sending display
@@ -1599,7 +1609,7 @@ function AddUserModal({ onAdd, onClose }:{ onAdd:(user:AdminUserData)=>void; onC
                 {/* Must submit the head's userId — a name is rejected with 422. */}
                 <select value={reportsTo} onChange={e=>setReportsTo(e.target.value)} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
                   <option value="">{t("— اختر المسؤول المباشر —","— Select Direct Supervisor —")}</option>
-                  {headOptions.map((h:any)=><option key={h.id} value={h.id}>{h.name}</option>)}
+                  {headOptions.map((h:any)=><option key={h.id} value={h.id}>{h.label}</option>)}
                 </select>
                 {headOptions.length===0 && <p className="text-[11px] text-gray-400 mt-1">{t("لا يوجد رؤساء حسابات بعد","No head accountants yet")}</p>}
               </div>
@@ -11186,7 +11196,7 @@ function AdminUsers({ navigate, setModal, ops, approveOp, rejectOp, finalApprove
                               <tr className="bg-gray-50 border-b border-gray-100">
                                 <th className="px-4 py-2.5 text-xs font-bold text-gray-500 text-right min-w-[140px]">{t("المطعم","Restaurant")}</th>
                                 {COLS.map(m=>{ const lbl = String(m.label ?? m.value ?? ""); return (
-                                  <th key={m.value} className="px-2 py-2.5 text-[10px] font-bold text-gray-400 text-center min-w-[60px]" title={lbl}>{lbl.slice(0,5)}</th>
+                                  <th key={m.value} className="px-2 py-2.5 text-[10px] font-bold text-gray-500 text-center align-bottom min-w-[56px] max-w-[76px] whitespace-normal break-words leading-tight" title={lbl}>{lbl}</th>
                                 );})}
                                 <th className="px-3 py-2.5 text-[10px] font-bold text-gray-400 text-center">الكل</th>
                               </tr>
@@ -11950,6 +11960,20 @@ function AdminRestaurants({}: PageProps) {
           fixedAssets: apiShared.fixedAssets ?? false,
         };
         const apiCompletionPct = (brandUploadStatus as any)?.completionPct as number | undefined;
+        // 2026-08-03: the server now ships a `summary{shared,branchAssets,
+        // restaurantEmployees,completionPct}` block that feeds every «ملخص رفع
+        // البيانات» tile directly — the cards used to derive their own counts and
+        // pinned «بيانات مشتركة» at 3/4 and «اكتمال الإعداد» at 75%. Bind to it
+        // when present; fall back to local math offline.
+        const uploadSummary = (brandUploadStatus as any)?.summary as {
+          shared?: { done:number; total:number };
+          branchAssets?: { done:number; total:number };
+          restaurantEmployees?: { done:number; total:number };
+          completionPct?: number;
+        } | undefined;
+        const frac = (o?: { done:number; total:number }, fallback = "") =>
+          o && typeof o.done === "number" && typeof o.total === "number"
+            ? `${o.done}/${o.total}` : fallback;
 
         // per-restaurant employee upload state
         const empKey = (rid:string) => `${uploadBrand}_${rid}`;
@@ -12031,7 +12055,7 @@ function AdminRestaurants({}: PageProps) {
                   onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) onUpload(f); }}/>
                 <Upload size={11}/> {busy?t("جارٍ…","…"):t("رفع","Upload")}
               </label>
-              <Btn size="sm" onClick={()=>templateMut.mutate({ type: templateType })}><Download size={11}/> {t("نموذج","Template")}</Btn>
+              <Btn size="sm" onClick={()=>templateMut.mutate({ type: templateType, brandId: uploadBrand })}><Download size={11}/> {t("نموذج","Template")}</Btn>
             </div>
           </div>
         );
@@ -12177,7 +12201,7 @@ function AdminRestaurants({}: PageProps) {
                               uploadEmpMut.mutate({ restaurantId: rest.id, file: f }, { onSuccess:(r)=>{ noteRowErrors(errKey,r); setRestEmp(rest.id); }, onError:(er)=>noteUploadError(errKey,er) }); }}/>
                           <Upload size={10}/>{done?t("تحديث","Update"):t("رفع","Upload")}
                         </label>
-                        <Btn size="sm" onClick={()=>templateMut.mutate({ type:"employees" })}><Download size={10}/></Btn>
+                        <Btn size="sm" onClick={()=>templateMut.mutate({ type:"employees", restaurantId: rest.id })}><Download size={10}/></Btn>
                       </div>
                     </div>
                     {err && <div className="px-4 pb-3"><UploadErrorBox err={err}/></div>}
@@ -12249,7 +12273,7 @@ function AdminRestaurants({}: PageProps) {
                                 uploadAssetsMut.mutate({ branchId, file: f }, { onSuccess:(r)=>{ noteRowErrors(errKey,r); setBranchAsset(aKey); }, onError:(er)=>noteUploadError(errKey,er) }); }}/>
                             <Upload size={9}/>{done?t("تحديث","Update"):t("رفع","Upload")}
                           </label>
-                          <Btn size="sm" onClick={()=>templateMut.mutate({ type:"fixed-assets" })}><Download size={9}/></Btn>
+                          <Btn size="sm" onClick={()=>templateMut.mutate(branchId ? { type:"fixed-assets", branchId } : { type:"fixed-assets", brandId: uploadBrand })}><Download size={9}/></Btn>
                         </div>
                       </div>
                       </div>
@@ -12264,28 +12288,29 @@ function AdminRestaurants({}: PageProps) {
               <p className="text-xs font-bold text-purple-800 mb-3">{t("ملخص رفع البيانات","Upload Summary")} — {selBrand.name}</p>
               <div className="grid grid-cols-4 gap-3">
                 <div className="text-center bg-white rounded-lg p-2.5 border border-purple-100">
-                  <p className="text-base font-extrabold text-purple-700">{[sharedDone.sales,sharedDone.materials,sharedDone.suppliers,sharedDone.fixedAssets].filter(Boolean).length}/4</p>
+                  <p className="text-base font-extrabold text-purple-700">{frac(uploadSummary?.shared, `${[sharedDone.sales,sharedDone.materials,sharedDone.suppliers].filter(Boolean).length}/3`)}</p>
                   <p className="text-[10px] text-purple-500 mt-0.5">{t("بيانات مشتركة","Shared Data")}</p>
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-blue-100">
-                  <p className="text-base font-extrabold text-blue-700">{selBrand.restaurants.filter(r=>restEmpDone(r.id)).length}/{selBrand.restaurants.length}</p>
+                  <p className="text-base font-extrabold text-blue-700">{frac(uploadSummary?.restaurantEmployees, `${selBrand.restaurants.filter(r=>restEmpDone(r.id)).length}/${selBrand.restaurants.length}`)}</p>
                   <p className="text-[10px] text-blue-500 mt-0.5">{t("موظفو المطاعم","Restaurant Employees")}</p>
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-emerald-100">
                   <p className="text-base font-extrabold text-emerald-700">
-                    {branchAssetDoneCount}/{branchTotalCount}
+                    {frac(uploadSummary?.branchAssets, `${branchAssetDoneCount}/${branchTotalCount}`)}
                   </p>
                   <p className="text-[10px] text-emerald-500 mt-0.5">{t("أصول الفروع","Branch Assets")}</p>
                 </div>
                 <div className="text-center bg-white rounded-lg p-2.5 border border-gray-100">
                   {(()=>{
-                    // Prefer the server's completionPct (counts four steps and only
-                    // credits successful uploads); fall back to local math offline.
-                    const sharedCount = [sharedDone.sales,sharedDone.materials,sharedDone.suppliers,sharedDone.fixedAssets].filter(Boolean).length;
+                    // Prefer the server's summary.completionPct / completionPct (spans
+                    // the whole onboarding and only credits successful uploads); fall
+                    // back to local math offline.
+                    const sharedCount = [sharedDone.sales,sharedDone.materials,sharedDone.suppliers].filter(Boolean).length;
                     const restCount   = selBrand.restaurants.length;
                     const empDone     = selBrand.restaurants.filter(r=>restEmpDone(r.id)).length;
-                    const localPct    = Math.round(((sharedCount/4)+(restCount?empDone/restCount:0))/2*100);
-                    const pct         = apiCompletionPct ?? localPct;
+                    const localPct    = Math.round(((sharedCount/3)+(restCount?empDone/restCount:0))/2*100);
+                    const pct         = uploadSummary?.completionPct ?? apiCompletionPct ?? localPct;
                     const pctCls      = pct===100?"text-emerald-700":pct>=60?"text-amber-600":"text-gray-500";
                     return (<>
                       <p className={`text-base font-extrabold ${pctCls}`}>{pct}%</p>
@@ -12794,11 +12819,11 @@ function AdminSubscriptions({}: PageProps) {
   }, [packagesApi]);
   // Inline editor for the expanded-card actions (plan / add-restaurant / modules).
   const [subEdit, setSubEdit] = useState<{ kind: "plan" | "restaurant" | "modules"; sub: any } | null>(null);
-  const { t, dir } = useLang();
+  const { t, dir, lang } = useLang();
   // Driven by GET /admin/subscriptions — mapped into the card render shape. No static seed.
   type SubCard = {
     id:string; brandId?:string; name:string; abbr:string; color:string; owner:string; plan:string;
-    subStatus:"active"|"warning"|"danger"|"expired"|"none"; hasSub:boolean; expires:string; daysLeft:number;
+    subStatus:"active"|"warning"|"danger"|"expired"|"none"; hasSub:boolean; expires:string; expiresAtDate?:string; isExpired?:boolean; daysLeft:number;
     monthlyPrice?:number; restaurants:any[]; modules:string[];
   };
   const [subs, setSubs] = useState<SubCard[]>([]);
@@ -12822,6 +12847,10 @@ function AdminSubscriptions({}: PageProps) {
       subStatus: (s.status ?? "active") as SubCard["subStatus"],
       hasSub: true,
       expires: s.expiresAt ?? "",
+      // 2026-08-03: prefer the server's display-ready YYYY-MM-DD; `daysLeft` is now
+      // recomputed at read time and `isExpired` is authoritative (was a stale column).
+      expiresAtDate: s.expiresAtDate ?? s.expiresAt ?? "",
+      isExpired: s.isExpired ?? ((s.daysLeft ?? 0) < 0),
       daysLeft: s.daysLeft ?? 0,
       monthlyPrice: s.monthlyPrice,
       restaurants: Array.isArray(brand?.restaurants) ? brand.restaurants : (Array.isArray(s.restaurants) ? s.restaurants : []),
@@ -12956,8 +12985,8 @@ function AdminSubscriptions({}: PageProps) {
                 {/* Expiry bar */}
                 <div className="w-40 flex-shrink-0 hidden md:block">
                   <div className="flex justify-between text-[10px] text-gray-400 mb-1">
-                    <span>{t("تاريخ الانتهاء:","Expires:")} {sub.expires}</span>
-                    <span className={sub.daysLeft<0?"text-red-600 font-bold":""}>{sub.daysLeft<0?`${t("منتهي","Expired")} ${Math.abs(sub.daysLeft)} ${t("يوم","days")}`:`${sub.daysLeft} ${t("يوم","days")}`}</span>
+                    <span>{t("تاريخ الانتهاء:","Expires:")} {formatDateLong(lang, sub.expiresAtDate || sub.expires) || sub.expires || "—"}</span>
+                    <span className={sub.isExpired?"text-red-600 font-bold":""}>{sub.isExpired?`${t("منتهي","Expired")} ${Math.abs(sub.daysLeft)} ${t("يوم","days")}`:`${sub.daysLeft} ${t("يوم","days")}`}</span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-1.5">
                     <div className={`h-1.5 rounded-full transition-all ${sub.subStatus==="active"?"bg-emerald-500":sub.subStatus==="warning"?"bg-amber-500":"bg-red-500"}`}
@@ -13085,7 +13114,7 @@ function AdminCompanies({ navigate }:PageProps) {
       { onSuccess: ()=>{ setShowAdd(false); setCoForm({ name:"", contactName:"", adminEmail:"", phone:"", city:"", plan:"Professional" }); } },
     );
   };
-  const { t, dir } = useLang();
+  const { t, dir, lang } = useLang();
   const apiCompaniesArr = (apiCompanies as any)?.data ?? (apiCompanies as any);
   // Driven by GET /admin/companies. No static seed; map into the card shape with
   // safe defaults so missing fields never crash the filters/reducers below.
@@ -13227,7 +13256,7 @@ function AdminCompanies({ navigate }:PageProps) {
                     <div className={`h-1.5 rounded-full ${branchPct>=90?"bg-red-500":branchPct>=70?"bg-amber-500":"bg-emerald-500"}`}
                       style={{width:`${Math.min(100,branchPct)}%`}}/>
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1">{t("تنتهي:","Expires:")} {c.nextBilling}</p>
+                  <p className="text-[10px] text-gray-400 mt-1">{t("تنتهي:","Expires:")} {formatDateLong(lang, c.nextBilling) || c.nextBilling || "—"}</p>
                 </div>
 
                 {/* Revenue + actions */}
@@ -13341,7 +13370,7 @@ function AdminCompanies({ navigate }:PageProps) {
                   </div>
                   <div>
                     <p className="text-xs text-gray-400">{t("التجديد القادم","Next Renewal")}</p>
-                    <p className={`font-bold ${selected.daysLeft<=30?"text-red-600":"text-gray-800"}`}>{selected.nextBilling}</p>
+                    <p className={`font-bold ${selected.daysLeft<=30?"text-red-600":"text-gray-800"}`}>{formatDateLong(lang, selected.nextBilling) || selected.nextBilling || "—"}</p>
                   </div>
                 </div>
               </div>
