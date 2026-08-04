@@ -8,6 +8,12 @@ import { api, downloadBlob } from "../client";
 import { getErrorMessage, ApiError } from "../errors";
 import { queryKeys, type ProcurementOrdersFilter } from "./keys";
 import type { PurchaseOrderSendResult } from "../types/platform";
+// The catalog surface follows the signed-in account: a platform procurement
+// manager (company_id NULL) writes to /procurement/*, a company one to
+// /company/me/procurement/*. Company `/company/me/*` refuses a companyless user
+// with 403 WRONG_TENANT — which is exactly the «المستخدم غير مرتبط بشركة» the
+// platform manager hit on «إضافة صنف». AuthContext keeps procBase() in sync.
+import { procBase } from "./platform/procurement";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 export interface ProcurementOverviewResponse {
@@ -330,7 +336,7 @@ export function useItemPriceHistory(id: string | null | undefined) {
     queryFn: async () => {
       const res = await api.get<
         { data: ItemPriceHistoryRow[] } | ItemPriceHistoryRow[]
-      >(`/company/me/procurement/items/${id}/price-history`);
+      >(`${procBase()}/items/${id}/price-history`);
       const d = res.data as
         | { data?: ItemPriceHistoryRow[] }
         | ItemPriceHistoryRow[];
@@ -339,21 +345,29 @@ export function useItemPriceHistory(id: string | null | undefined) {
   });
 }
 
+// Write body: send `lastPriceSar` (riyals — matches the «آخر سعر (ر.س)» field);
+// `lastPriceHalalas`/`defaultPriceHalalas` (halalas) stay accepted for old callers.
+type ProcurementItemWrite = Partial<ProcurementItem> & {
+  lastPriceSar?: number;
+  defaultPriceHalalas?: number;
+};
+
+const invalidateProcItems = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
+  // The platform procurement surface caches items under a different key — refresh
+  // it too so the list updates without a manual reload on either surface.
+  qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
+};
+
 export function useCreateProcurementItem() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: Partial<ProcurementItem>) => {
-      const res = await api.post<ProcurementItem>(
-        "/company/me/procurement/items",
-        body,
-      );
+    mutationFn: async (body: ProcurementItemWrite) => {
+      const res = await api.post<ProcurementItem>(`${procBase()}/items`, body);
       return res.data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
-      // The platform procurement surface caches items under a different key — refresh
-      // it too so the list updates without a manual reload on either surface.
-      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
+      invalidateProcItems(qc);
       toast.success("تم إضافة الصنف");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -364,13 +378,10 @@ export function useDeleteProcurementItem() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (id: string) => {
-      await api.delete(`/company/me/procurement/items/${id}`);
+      await api.delete(`${procBase()}/items/${id}`);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
-      // The platform procurement surface caches items under a different key — refresh
-      // it too so the list updates without a manual reload on either surface.
-      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
+      invalidateProcItems(qc);
       toast.success("تم حذف الصنف");
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
@@ -383,19 +394,56 @@ export function useUpdateProcurementItem() {
     mutationFn: async ({
       id,
       ...patch
-    }: { id: string } & Partial<ProcurementItem>) => {
+    }: { id: string } & ProcurementItemWrite) => {
       const res = await api.patch<ProcurementItem>(
-        `/company/me/procurement/items/${id}`,
+        `${procBase()}/items/${id}`,
         patch,
       );
       return res.data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.procurementItems });
-      // The platform procurement surface caches items under a different key — refresh
-      // it too so the list updates without a manual reload on either surface.
-      qc.invalidateQueries({ queryKey: queryKeys.platformProcurementItems });
+      invalidateProcItems(qc);
       toast.success("تم تحديث الصنف");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Download the catalog template (empty, or the account's saved rows). */
+export function useProcurementItemsTemplate() {
+  return useMutation({
+    mutationFn: async (format: "xlsx" | "csv" = "xlsx") => {
+      await downloadBlob(
+        `${procBase()}/items/template`,
+        `procurement-items-template.${format}`,
+        { format },
+      );
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Bulk import the catalog from Excel/CSV. Idempotent (code, else name). */
+export function useImportProcurementItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api.post<{
+        itemCount: number;
+        errors?: Array<{ row: number; message: string }>;
+      }>(`${procBase()}/items/import`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      invalidateProcItems(qc);
+      const n = data?.itemCount ?? 0;
+      const failed = data?.errors?.length ?? 0;
+      if (failed > 0) toast.warning(`تم استيراد ${n} صنف · ${failed} صف به خطأ`);
+      else toast.success(`تم استيراد ${n} صنف`);
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });
@@ -545,7 +593,7 @@ export function useExportProcurementItems() {
   return useMutation({
     mutationFn: async (format: "xlsx" | "csv" = "xlsx") => {
       await downloadBlob(
-        "/company/me/procurement/items/export",
+        `${procBase()}/items/export`,
         `procurement-items.${format}`,
         { format },
       );

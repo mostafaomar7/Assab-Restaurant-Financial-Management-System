@@ -137,11 +137,18 @@ export function useSupplierItems() {
   });
 }
 
+// Write body: prefer `priceSar` (riyals — matches the «السعر (ر.س)» field);
+// `price`/`priceHalalas` (halalas) stay accepted for older callers.
+type SupplierItemWrite = Partial<SupplierItem> & {
+  priceSar?: number;
+  supplierId?: string;
+};
+
 export function useCreateSupplierItem() {
   const qc = useQueryClient();
   return useMutation({
-    // T13 §8 — name required; priceHalalas OR price required (both integer halalas).
-    mutationFn: async (body: Partial<SupplierItem> & { name: string }) => {
+    // T13 §8 — name required; priceSar (riyals) OR priceHalalas (halalas) for price.
+    mutationFn: async (body: SupplierItemWrite & { name: string }) => {
       const res = await api.post<SupplierItem>("/asab/supplier/items", body);
       return res.data;
     },
@@ -159,7 +166,7 @@ export function useUpdateSupplierItem() {
     mutationFn: async ({
       id,
       ...patch
-    }: { id: string } & Partial<SupplierItem>) => {
+    }: { id: string } & SupplierItemWrite) => {
       const res = await api.patch<SupplierItem>(
         `/asab/supplier/items/${id}`,
         patch,
@@ -213,6 +220,46 @@ export function useExportSupplierItems() {
         `supplier-items.${format}`,
         { format },
       );
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Download the supplier catalog template (empty, or the supplier's saved rows). */
+export function useSupplierItemsTemplate() {
+  return useMutation({
+    mutationFn: async (format: "xlsx" | "csv" = "xlsx") => {
+      await downloadBlob(
+        "/asab/supplier/items/template",
+        `supplier-items-template.${format}`,
+        { format },
+      );
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
+/** Bulk import the supplier catalog from Excel/CSV. Idempotent (code, else name). */
+export function useImportSupplierItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api.post<{
+        itemCount: number;
+        errors?: Array<{ row: number; message: string }>;
+      }>("/asab/supplier/items/import", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return res.data;
+    },
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["platform", "supplier", "items"] });
+      const n = data?.itemCount ?? 0;
+      const failed = data?.errors?.length ?? 0;
+      if (failed > 0) toast.warning(`تم استيراد ${n} صنف · ${failed} صف به خطأ`);
+      else toast.success(`تم استيراد ${n} صنف`);
     },
     onError: (e) => toast.error(getErrorMessage(e, "ar")),
   });

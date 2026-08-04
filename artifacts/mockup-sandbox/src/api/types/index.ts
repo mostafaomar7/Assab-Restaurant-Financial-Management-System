@@ -31,9 +31,22 @@ export interface LoginResponse {
   defaultPage: string;
 }
 
+/** 2026-08-04: business identity of a supplier login (read live from asab_suppliers). */
+export interface MeSupplier {
+  id: string;
+  /** The business name shown in the supplier-portal header (≠ the login person's `name`). */
+  name: string;
+  category?: string;
+  companyId?: string | null;
+  status?: string;
+  records?: Array<{ id: string; name: string; status?: string }>;
+}
+
 export interface MeResponse extends User {
   /** Permission map (key → boolean) for UI gating. */
   permissions: Record<string, boolean>;
+  /** Present for role `supplier` — carries the business name for the header. */
+  supplier?: MeSupplier | null;
 }
 
 // ─── Operations (the 6-stage approval pipeline core) ─────────────────────────

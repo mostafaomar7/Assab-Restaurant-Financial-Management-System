@@ -1617,6 +1617,41 @@ export function useAdminUploadEmployees() {
   });
 }
 
+// 2026-08-04: employees upload per BRANCH (not just per restaurant) so a newly
+// built branch has a place to upload its roster, mirroring fixed-assets.
+export function useAdminUploadBranchEmployees() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      branchId,
+      file,
+    }: {
+      branchId: string;
+      file: File;
+    }) => {
+      assertUploadFile(file);
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api.post<
+        AdminUploadResult & { employeeCount?: number }
+      >(`/admin/branches/${branchId}/upload/employees`, fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      return res.data;
+    },
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "branches"] });
+      qc.invalidateQueries({
+        queryKey: ["platform", "admin", "branches", vars.branchId, "upload-status"],
+      });
+      // Refresh the whole-column endpoint + the brand summary (keyed under brands).
+      qc.invalidateQueries({ queryKey: ["platform", "admin", "brands"] });
+      toast.success("تم رفع موظفي الفرع");
+    },
+    onError: (e) => toast.error(getErrorMessage(e, "ar")),
+  });
+}
+
 export function useAdminUploadFixedAssets() {
   const qc = useQueryClient();
   return useMutation({

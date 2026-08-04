@@ -352,6 +352,11 @@ export interface AdminBranchFixedAssetsRow {
   fixedAssetsStatus?: "done" | "failed" | "not_uploaded";
   fixedAssetsCount?: number;
   fixedAssetsFailureReason?: string | null;
+  /** 2026-08-04: per-branch employees column, mirrors the fixed-assets one. */
+  employees?: boolean;
+  employeesStatus?: "done" | "failed" | "not_uploaded";
+  employeesCount?: number;
+  employeesFailureReason?: string | null;
   reason?: string | null;
 }
 

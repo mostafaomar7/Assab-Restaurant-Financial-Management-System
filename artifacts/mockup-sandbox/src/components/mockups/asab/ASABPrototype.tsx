@@ -104,6 +104,7 @@ import {
   useImportAdminUsers,
   useAdminUploadBrand,
   useAdminUploadEmployees,
+  useAdminUploadBranchEmployees,
   useAdminUploadFixedAssets,
   useAdminUploadTemplate,
   useAdminBrandUploadStatus,
@@ -173,6 +174,8 @@ import {
   useUpdateProcurementItem,
   useDeleteProcurementItem,
   useItemPriceHistory,
+  useImportProcurementItems,
+  useProcurementItemsTemplate,
   useRateSupplier,
   useToggleSupplierActive,
   useUpdateSupplier,
@@ -190,6 +193,8 @@ import {
   useUpdateSupplierItem,
   useDeleteSupplierItem,
   useToggleSupplierItemActive,
+  useImportSupplierItems,
+  useSupplierItemsTemplate,
   // Mutation hooks (operations + ERP) — shared platform/company paths.
   useApproveOperation,
   useRejectOperation,
@@ -1681,13 +1686,17 @@ function Sidebar({ role, ops, page, navigate, logout, collapsed, setCollapsed }:
   const realBranchName = (branchOverview as any)?.branch?.name as string | undefined;
   // Show the real logged-in user's name + avatar (from useAuth); use the real branch
   // name in the branch role's label. Falls back to the static demo profile otherwise.
+  // A supplier login's business name lives in /auth/me `supplier.name` (≠ the
+  // login person's `name`). Renaming the supplier updates it, so the header
+  // reflects the change instead of a stale/static label.
+  const supplierName = role === "supplier" ? (user as any)?.supplier?.name as string | undefined : undefined;
   const profile = {
     ...baseProfile,
     name: user?.name || baseProfile.name,
     avatar: user?.avatar || (user?.name ? nameInitials(user.name) : baseProfile.avatar),
     label: (role === "branch" && realBranchName)
       ? `${lang === "ar" ? "مدير فرع" : "Branch Manager —"} ${realBranchName}`
-      : baseProfile.label,
+      : (supplierName || baseProfile.label),
   };
   const navEntries = NAV_CONFIG[role];
   const { drafts } = useContext(AssetDraftContext);
@@ -1828,7 +1837,10 @@ function AppShell({ state, ops, period, setPeriod, approveOp, rejectOp, finalApp
   const createAdminUserMut = useCreateAdminUser();
 
   const role = state.role!;
+  const { user } = useAuth();
   const profile = ROLE_PROFILES[role];
+  // Supplier header shows the business name from /auth/me `supplier.name`.
+  const supplierName = role === "supplier" ? (user as any)?.supplier?.name as string | undefined : undefined;
 
   const pageLabel = useMemo(()=>{
     const nav = NAV_CONFIG[role];
@@ -1854,7 +1866,7 @@ function AppShell({ state, ops, period, setPeriod, approveOp, rejectOp, finalApp
         <header className="bg-white border-b border-gray-100 px-5 py-3 flex items-center gap-4 flex-shrink-0 shadow-sm z-10">
           <div className="flex-1 min-w-0">
             <h1 className="text-gray-800 font-bold text-base leading-tight">{pageLabel}</h1>
-            <p className="text-gray-400 text-xs">{enProfile.label}</p>
+            <p className="text-gray-400 text-xs">{supplierName || enProfile.label}</p>
           </div>
           <div className="flex items-center gap-2">
             <div className="text-xs text-gray-400 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-lg hidden sm:block">
@@ -6147,8 +6159,15 @@ function AccInventoryItems({ navigate }:PageProps) {
   const brandsResponded = Array.isArray(brandsApi);
   const apiBrands = (brandsResponded ? brandsApi : []) as any[];
   const isApiBrands = apiBrands.length > 0;
-  const brandRows = brandsResponded
+  // Once the accountant-scoped API has RESPONDED with an empty scope, honor it:
+  // no assigned brand → honest empty state, never the demo brands. Showing the
+  // demo brands here was the misleading «بيانات قديمة» the accountant saw — real
+  // names but a catalog gated off (isApiBrands=false), so nothing was selectable.
+  // Demo brands remain only for the brief pre-response window.
+  const brandRows = isApiBrands
     ? apiBrands.map(b=>({ id:String(b?.id ?? b?.name ?? ""), name:String(b?.name ?? b?.id ?? ""), branchCount:Number(b?.branchCount ?? 0) }))
+    : brandsResponded
+    ? []
     : Object.keys(DEMO_BRAND_BRANCHES).map(n=>({ id:n, name:n, branchCount:DEMO_BRAND_BRANCHES[n].length }));
   const brands = brandRows.map(b=>b.name);
   const brandIdByName: Record<string,string> = Object.fromEntries(brandRows.map(b=>[b.name,b.id]));
@@ -6255,7 +6274,9 @@ function AccInventoryItems({ navigate }:PageProps) {
 
       {brands.length===0 ? (
         <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-10">
-          <EmptyState icon="📦" title="لا يوجد كتالوج أصناف بعد" desc="ارفع كتالوج الأصناف للعلامة أولاً، ثم حدّد أصناف الجرد اليومي لكل فرع."/>
+          <EmptyState icon="📦"
+            title={brandsResponded ? "لا توجد علامات مخصّصة لك بعد" : "لا يوجد كتالوج أصناف بعد"}
+            desc={brandsResponded ? "لم تُخصَّص لك أي علامة تجارية بعد. تواصل مع الأدمن لتخصيص علامة، وتأكد من رفع كتالوج أصنافها." : "ارفع كتالوج الأصناف للعلامة أولاً، ثم حدّد أصناف الجرد اليومي لكل فرع."}/>
         </div>
       ) : (<>
       {/* Brand + Branch selector */}
@@ -11822,6 +11843,7 @@ function AdminRestaurants({}: PageProps) {
   // ── Real upload wiring (the tab was entirely local booleans before) ──────────
   const uploadBrandMut  = useAdminUploadBrand();
   const uploadEmpMut    = useAdminUploadEmployees();
+  const uploadBranchEmpMut = useAdminUploadBranchEmployees();
   const uploadAssetsMut = useAdminUploadFixedAssets();
   const templateMut     = useAdminUploadTemplate();
   const { data: brandUploadStatus } = useAdminBrandUploadStatus(uploadBrand);
@@ -11839,22 +11861,26 @@ function AdminRestaurants({}: PageProps) {
   // in one call. Brand upload-status never tracked per-branch assets, so the
   // column was stuck on «لم يُرفع» before this.
   const { data: branchesAssetStatus } = useAdminBrandBranchesUploadStatus(uploadBrand);
-  const { branchAssetStatusMap, branchAssetReasonMap } = useMemo(() => {
+  const { branchAssetStatusMap, branchAssetReasonMap, branchEmpStatusMap } = useMemo(() => {
     const raw: any = (branchesAssetStatus as any)?.branches ?? branchesAssetStatus ?? [];
     const map: Record<string, "done" | "failed" | "not_uploaded"> = {};
     const reasons: Record<string, string> = {};
+    const emp: Record<string, "done" | "failed" | "not_uploaded"> = {};
     const put = (id:string, v:any) => {
       if (!id) return;
       map[id] = (v?.fixedAssetsStatus ?? v?.status ?? v) as any;
       const r = v?.fixedAssetsFailureReason ?? v?.reason;
       if (r) reasons[id] = r;
+      // 2026-08-04: same payload now carries the per-branch employees column.
+      const es = v?.employeesStatus ?? (v?.employees === true ? "done" : v?.employees === false ? "not_uploaded" : undefined);
+      if (es) emp[id] = es as any;
     };
     if (Array.isArray(raw)) {
       for (const b of raw) put(b?.branchId ?? b?.id, b);
     } else if (raw && typeof raw === "object") {
       for (const [id, v] of Object.entries(raw)) put(id, v);
     }
-    return { branchAssetStatusMap: map, branchAssetReasonMap: reasons };
+    return { branchAssetStatusMap: map, branchAssetReasonMap: reasons, branchEmpStatusMap: emp };
   }, [branchesAssetStatus]);
   // Last failure per card key, so INVALID_HEADER can show expected vs received.
   const [uploadErrors, setUploadErrors] = useState<Record<string, any>>({});
@@ -12274,6 +12300,73 @@ function AdminRestaurants({}: PageProps) {
                             <Upload size={9}/>{done?t("تحديث","Update"):t("رفع","Upload")}
                           </label>
                           <Btn size="sm" onClick={()=>templateMut.mutate(branchId ? { type:"fixed-assets", branchId } : { type:"fixed-assets", brandId: uploadBrand })}><Download size={9}/></Btn>
+                        </div>
+                      </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+
+            {/* ── Section 4: Per-branch employees (2026-08-04) ── */}
+            <div>
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-1 h-5 rounded-full bg-blue-500"/>
+                <div className="flex-1">
+                  <p className="font-bold text-gray-800 text-sm">{t("موظفو الفروع","Branch Employees")} — {selBrand.name}</p>
+                  <p className="text-[11px] text-gray-400">{t("كل فرع يرفع كشف موظفيه (نفس قالب الموظفين)","Each branch uploads its own employee roster (same employees template)")}</p>
+                </div>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700">
+                  {selBrand.restaurants.flatMap((r:any)=>r.branches.map((br:any)=>{const bid=typeof br==="string"?"":(br?.id??""); return bid&&branchEmpStatusMap[bid]==="done";})).filter(Boolean).length}/{branchTotalCount} {t("فرع","branches")}
+                </span>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                <div className="grid grid-cols-6 gap-0 bg-gray-50 border-b border-gray-200 px-4 py-2">
+                  <p className="text-[10px] font-bold text-gray-500 col-span-2">{t("المطعم","Restaurant")}</p>
+                  <p className="text-[10px] font-bold text-gray-500 col-span-2">{t("الفرع","Branch")}</p>
+                  <p className="text-[10px] font-bold text-gray-500 text-center">{t("حالة الرفع","Upload Status")}</p>
+                  <p className="text-[10px] font-bold text-gray-500 text-center">{t("إجراء","Action")}</p>
+                </div>
+                {selBrand.restaurants.filter(r=>!uploadRestFilter||r.name.includes(uploadRestFilter)).flatMap(rest=>
+                  rest.branches.map((br:any,bi:number)=>{
+                    const branchId = typeof br === "string" ? "" : (br?.id ?? "");
+                    const eKey = `bemp_${branchId || `${uploadBrand}_${rest.id}_${bi}`}`;
+                    const status = branchId ? branchEmpStatusMap[branchId] : undefined;
+                    const done = status === "done";
+                    const failed = status === "failed";
+                    return (
+                      <div key={eKey} className="border-b border-gray-50 last:border-0">
+                      {uploadErrors[eKey] && <div className="px-4 pt-2"><UploadErrorBox err={uploadErrors[eKey]}/></div>}
+                      <div className="grid grid-cols-6 gap-0 items-center px-4 py-2.5 hover:bg-gray-50/50">
+                        <div className="col-span-2 flex items-center gap-2">
+                          <div className="w-5 h-5 rounded-md flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0" style={{background:selBrand.color+"aa"}}>{rest.name[0]}</div>
+                          <p className="text-[10px] text-gray-500 truncate">{rest.name}</p>
+                        </div>
+                        <div className="col-span-2 flex items-center gap-2">
+                          <Home size={10} className="text-gray-300 flex-shrink-0"/>
+                          <div>
+                            <p className="text-xs font-semibold text-gray-700">{br.name}</p>
+                            <p className="text-[10px] text-gray-400">{br.manager}</p>
+                          </div>
+                        </div>
+                        <div className="text-center">
+                          {done
+                            ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full"><CheckCircle2 size={9}/> {t("مرفوع","Uploaded")}</span>
+                            : failed
+                            ? <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-700 bg-red-50 px-2 py-0.5 rounded-full"><AlertTriangle size={9}/> {t("فشل الرفع","Upload failed")}</span>
+                            : <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-500 bg-gray-100 px-2 py-0.5 rounded-full"><Clock size={9}/> {t("لم يُرفع","Not Uploaded")}</span>
+                          }
+                        </div>
+                        <div className="text-center flex items-center justify-center gap-1">
+                          <label className={`px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors inline-flex items-center gap-1 ${branchId?"cursor-pointer":"opacity-40 cursor-not-allowed"} ${done?"bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-700":"bg-blue-600 text-white hover:bg-blue-700"}`}
+                            title={branchId?undefined:t("لا يوجد معرّف للفرع","Branch id unavailable")}>
+                            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={!branchId||uploadBranchEmpMut.isPending}
+                              onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(!f||!branchId) return; clearUploadError(eKey);
+                                uploadBranchEmpMut.mutate({ branchId, file: f }, { onSuccess:(r)=>noteRowErrors(eKey,r), onError:(er)=>noteUploadError(eKey,er) }); }}/>
+                            <Upload size={9}/>{done?t("تحديث","Update"):t("رفع","Upload")}
+                          </label>
+                          <Btn size="sm" onClick={()=>templateMut.mutate({ type:"employees", restaurantId: rest.id })}><Download size={9}/></Btn>
                         </div>
                       </div>
                       </div>
@@ -15868,6 +15961,8 @@ function ProcItems({}: PageProps) {
   const { t } = useLang();
   const { data: catLookup } = useLookup("supplier-categories");
   const exportItemsMut = useExportProcurementItems();
+  const importItemsMut = useImportProcurementItems();
+  const templateMut = useProcurementItemsTemplate();
   const createItemMut = useCreateProcurementItem();
   const updateItemMut = useUpdateProcurementItem();
   const deleteItemMut = useDeleteProcurementItem();
@@ -15881,11 +15976,13 @@ function ProcItems({}: PageProps) {
   const categories = (((catLookup as any)?.data ?? catLookup ?? []) as any[]);
   const catLabel = (c:any) => c.labelAr ?? c.label ?? c.name ?? c.value ?? c.key ?? "";
   const catValue = (c:any) => c.value ?? c.key ?? c.id ?? catLabel(c);
-  const priceOf = (item:any) => { const h = item.lastPriceHalalas ?? item.priceHalalas; return h!=null ? h/100 : (item.defaultPrice ?? null); };
+  // Prefer the server's riyal field; fall back to halalas÷100 for older payloads.
+  const priceOf = (item:any) => { if (item.lastPriceSar!=null) return item.lastPriceSar; const h = item.lastPriceHalalas ?? item.priceHalalas; return h!=null ? h/100 : (item.defaultPrice ?? null); };
   const submitItem = () => {
     if (!form.name.trim()) return;
+    // Field is «آخر سعر (ر.س)» → send riyals via lastPriceSar (backend converts to halalas).
     createItemMut.mutate(
-      { name: form.name, unit: form.unit, category: form.category, lastPriceHalalas: Math.round((parseFloat(form.price) || 0) * 100) } as any,
+      { name: form.name, unit: form.unit, category: form.category, lastPriceSar: parseFloat(form.price) || 0 } as any,
       { onSuccess: () => { setShowAdd(false); setForm({ name:"", unit:"", category:"", price:"" }); } },
     );
   };
@@ -15893,7 +15990,7 @@ function ProcItems({}: PageProps) {
   const submitEdit = () => {
     if (!editId || !editForm.name.trim()) return;
     updateItemMut.mutate(
-      { id: editId, name: editForm.name, unit: editForm.unit, category: editForm.category, lastPriceHalalas: Math.round((parseFloat(editForm.price) || 0) * 100) } as any,
+      { id: editId, name: editForm.name, unit: editForm.unit, category: editForm.category, lastPriceSar: parseFloat(editForm.price) || 0 } as any,
       { onSuccess: () => setEditId(null) },
     );
   };
@@ -15907,7 +16004,13 @@ function ProcItems({}: PageProps) {
       <div className="flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-gray-800">{t("كتالوج الأصناف","Item Catalog")}</h2><p className="text-gray-400 text-sm mt-0.5">{filtered.length} {t("صنف","items")}</p></div>
         <div className="flex gap-2">
-          <button onClick={()=>exportItemsMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> Excel</button>
+          <button onClick={()=>templateMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 text-gray-600 border border-gray-200 text-xs font-semibold hover:bg-gray-100"><Download size={11}/> {t("نموذج","Template")}</button>
+          <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${importItemsMut.isPending?"bg-purple-100 text-purple-400 border-purple-100":"bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"}`}>
+            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={importItemsMut.isPending}
+              onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) importItemsMut.mutate(f); }}/>
+            <Upload size={11}/> {importItemsMut.isPending?t("جارٍ…","…"):t("رفع Excel","Import Excel")}
+          </label>
+          <button onClick={()=>exportItemsMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> {t("تصدير","Export")}</button>
           <Btn variant="primary" onClick={()=>setShowAdd(true)}><Plus size={13}/> {t("إضافة صنف","Add Item")}</Btn>
         </div>
       </div>
@@ -16255,12 +16358,15 @@ function SupItems({}: PageProps) {
   const { data: apiItems } = useSupplierItems();
   const { t } = useLang();
   const exportSupItemsMut = useExportSupplierItems();
+  const importSupItemsMut = useImportSupplierItems();
+  const supTemplateMut = useSupplierItemsTemplate();
   const createItemMut = useCreateSupplierItem();
   const updateItemMut = useUpdateSupplierItem();
   const deleteItemMut = useDeleteSupplierItem();
   const toggleItemMut = useToggleSupplierItemActive();
   const items = (Array.isArray(apiItems) ? apiItems : []) as any[];
-  const priceSar = (it:any) => { const h = it.priceHalalas ?? it.price; return h!=null ? h/100 : null; };
+  // Prefer the server's riyal field; fall back to halalas÷100 for older payloads.
+  const priceSar = (it:any) => { if (it.priceSar!=null) return it.priceSar; const h = it.priceHalalas ?? it.price; return h!=null ? h/100 : null; };
   const isAvailable = (it:any) => it.available ?? (it.status==="active");
   const blank = { name:"", code:"", unit:"", minQty:"", maxQty:"", price:"", leadTimeDays:"", available:true };
   const [showAdd, setShowAdd] = useState(false);
@@ -16283,7 +16389,8 @@ function SupItems({}: PageProps) {
     unit: f.unit.trim() || undefined,
     minQty: f.minQty!=="" ? Number(f.minQty) : undefined,
     maxQty: f.maxQty!=="" ? Number(f.maxQty) : undefined,
-    priceHalalas: f.price!=="" ? Math.round((parseFloat(f.price)||0)*100) : undefined,
+    // Field is «السعر (ر.س)» → send riyals via priceSar (backend converts to halalas).
+    priceSar: f.price!=="" ? (parseFloat(f.price)||0) : undefined,
     leadTimeDays: f.leadTimeDays!=="" ? Number(f.leadTimeDays) : undefined,
     available: f.available,
   });
@@ -16321,7 +16428,13 @@ function SupItems({}: PageProps) {
       <div className="flex items-center justify-between">
         <div><h2 className="text-xl font-bold text-gray-800">{t("قائمة الأصناف","Item List")}</h2><p className="text-gray-400 text-sm mt-0.5">{items.length} {t("صنف","items")} · {t("المنتجات التي يوفرها المورد","Products offered by this supplier")}</p></div>
         <div className="flex gap-2">
-          <button onClick={()=>exportSupItemsMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> Excel</button>
+          <button onClick={()=>supTemplateMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gray-50 text-gray-600 border border-gray-200 text-xs font-semibold hover:bg-gray-100"><Download size={11}/> {t("نموذج","Template")}</button>
+          <label className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-semibold cursor-pointer ${importSupItemsMut.isPending?"bg-purple-100 text-purple-400 border-purple-100":"bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100"}`}>
+            <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={importSupItemsMut.isPending}
+              onChange={e=>{ const f=e.target.files?.[0]; e.target.value=""; if(f) importSupItemsMut.mutate(f); }}/>
+            <Upload size={11}/> {importSupItemsMut.isPending?t("جارٍ…","…"):t("رفع Excel","Import Excel")}
+          </label>
+          <button onClick={()=>exportSupItemsMut.mutate("xlsx")} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-semibold hover:bg-emerald-100"><FileText size={11}/> {t("تصدير","Export")}</button>
           <Btn variant="primary" onClick={()=>{ setForm(blank); setShowAdd(true); }}><Plus size={13}/> {t("إضافة صنف","Add Item")}</Btn>
         </div>
       </div>

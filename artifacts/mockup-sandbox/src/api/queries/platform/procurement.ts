@@ -39,7 +39,7 @@ export function setProcurementPlatformScope(isPlatform: boolean): void {
   procurementPlatformScope = isPlatform;
 }
 
-const procBase = () =>
+export const procBase = () =>
   procurementPlatformScope ? "/procurement" : "/company/me/procurement";
 
 // ─── Overview ───────────────────────────────────────────────────────────────
